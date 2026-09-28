@@ -386,7 +386,11 @@ button:focus-visible, select:focus-visible, input:focus-visible {outline:2px sol
 .chip.off .d {opacity:.25;}
 select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius:9px; background:#fff; color:#111827;}
 .small {font-size:12.5px; padding:4px 6px;}
+#vwrap {position:relative;}
 #v {width:100%; height:__H__px; position:relative;}
+#alabs {position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:5;}
+.al {position:absolute; left:0; top:0; font-size:10.5px; line-height:14px; padding:0 3px; background:rgba(255,255,255,.85);
+     border:1px solid #d1d5db; border-radius:4px; color:#111827; white-space:nowrap; will-change:transform;}
 .row {padding:10px 12px; border-top:1px solid #f1f2f4; display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
 .row.dim {opacity:.4; pointer-events:none;}
 .lbl {font-size:12.5px; color:#6b7280; font-weight:500; margin-right:2px;}
@@ -422,7 +426,7 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
       <button class="chip" id="tReset">Reset view</button>
     </div>
   </div>
-  <div id="v"></div>
+  <div id="vwrap"><div id="v"></div><div id="alabs"></div></div>
   <div class="row" id="elRow">
     <span class="lbl">Show</span>
     <select id="elSel" aria-label="Symmetry element to show"></select>
@@ -448,9 +452,18 @@ const D = __DATA__;
 const S = {style: Object.keys(D.styles)[0], labels: true, fill: true, mark: true, atomLab: "off",
            el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
 const v = $3Dmol.createViewer("v", {backgroundColor: "white"});
+const $ = id => document.getElementById(id);
 const model = v.addModel(D.xyz, "xyz");
 const atoms = model.selectedAtoms({});
 const P0 = D.atoms.map(a => a.p);
+// second copy of the molecule that never moves, drawn faint grey = the start positions
+const ghost = v.addModel(D.xyz, "xyz");
+function ghostStyle() {
+  const g = {color: "#9ca3af", opacity: 0.3};
+  if (S.style === "Spacefill") return {sphere: {...g, scale: 0.92}};
+  if (S.style === "Sticks") return {sphere: {...g, radius: 0.24}};
+  return {sphere: {...g, scale: 0.3}};
+}
 
 // every symmetry element in one list: axes, then planes, then the inversion center
 const ELS = [];
@@ -544,15 +557,13 @@ function markAtoms(list) {
   }));
 }
 
+// draw() redoes everything, only used when something changes (new element, new operation, a toggle)
+// during the animation only frame() runs, which just moves the atoms, way cheaper
 function draw() {
-  // put every atom where it should be right now
   const op = S.op >= 0 ? D.ops[S.op] : null;
-  const cur = P0.map(p => op ? pos(p, op, S.t) : p);
-  atoms.forEach((a, i) => { a.x = cur[i][0]; a.y = cur[i][1]; a.z = cur[i][2]; });
-
   v.removeAllShapes();
   v.removeAllLabels();
-  v.setStyle({}, D.styles[S.style]);  // this also makes 3Dmol redraw the moved atoms
+  ghost.setStyle({}, op && S.ghost ? ghostStyle() : {});
 
   if (op) {
     // animation mode, only show the element that belongs to this operation
@@ -560,8 +571,6 @@ function draw() {
     if (op.kind === "S") { axisLine(op.u, op.color, op.name); plane(op.u, "#94a3b8", ""); }
     if (op.kind === "s") plane(op.n, op.color, op.name);
     if (op.kind === "i") center(op.color);
-    // faint copy of where the atoms started, so u can see they end up on top of it
-    if (S.ghost) P0.forEach((p, i) => v.addSphere({center: pt(p), radius: atomR(D.atoms[i]) + 0.05, color: "#9ca3af", alpha: 0.3}));
   } else {
     // which elements to show: everything, only axes, only planes, or just one
     let list;
@@ -573,22 +582,64 @@ function draw() {
     // in the all views only mark atoms on planes, otherwise the whole molecule lights up
     if (S.mark) markAtoms(typeof S.el === "number" ? list : list.filter(e => e.kind === "plane"));
   }
-
-  // atom labels, they move with the atoms during the animation so u can follow them
-  if (S.atomLab !== "off") {
-    cur.forEach((p, i) => {
-      const txt = S.atomLab === "el" ? D.atoms[i].el : D.atoms[i].lab;
-      v.addLabel(txt, {position: pt(p), fontSize: 10, fontColor: "#111827", backgroundColor: "white",
-                       backgroundOpacity: 0.8, borderThickness: 1, borderColor: "#d1d5db", inFront: true,
-                       alignment: "center"});
-    });
-  }
+  moveAtoms();
+  model.setStyle({}, D.styles[S.style]);  // full rebuild of the molecule
+  buildLabels();
   v.render();
   ui();
 }
 
+// put every atom where it should be at time t
+function moveAtoms() {
+  const op = S.op >= 0 ? D.ops[S.op] : null;
+  atoms.forEach((a, i) => {
+    const q = op ? pos(P0[i], op, S.t) : P0[i];
+    a.x = q[0]; a.y = q[1]; a.z = q[2];
+  });
+}
+
+// one animation frame: move atoms, then either update the existing 3d shapes in place
+// (newer 3Dmol has syncAtomPositions for this) or rebuild just the molecule
+function frame() {
+  moveAtoms();
+  if (!(model.syncAtomPositions && model.syncAtomPositions())) model.setStyle({}, D.styles[S.style]);
+  v.render();
+  uiAnim();
+}
+
+// atom labels are normal html on top of the 3d view, moving them is basically free
+// compared to making 120 new 3Dmol labels every frame (that was what made it laggy)
+const lbox = $("alabs");
+let lspans = [];
+function buildLabels() {
+  lbox.innerHTML = "";
+  lspans = [];
+  if (S.atomLab === "off") return;
+  D.atoms.forEach(a => {
+    const s = document.createElement("span");
+    s.className = "al";
+    s.textContent = S.atomLab === "el" ? a.el : a.lab;
+    lbox.appendChild(s);
+    lspans.push(s);
+  });
+  placeLabels();
+}
+function placeLabels() {
+  if (!lspans.length) return;
+  const cv = $("v").querySelector("canvas");
+  if (!cv) return;
+  const r = cv.getBoundingClientRect();
+  const left = r.left + window.pageXOffset - document.documentElement.clientLeft;
+  const top = r.top + window.pageYOffset - document.documentElement.clientTop;
+  const sc = v.modelToScreen(atoms.map(a => ({x: a.x, y: a.y, z: a.z})));
+  sc.forEach((p, i) => {
+    lspans[i].style.transform = "translate(" + (p.x - left) + "px," + (p.y - top) + "px) translate(-50%,-50%)";
+  });
+}
+// 3Dmol calls this after every render, so labels follow when u rotate/zoom too
+v.setViewChangeCallback(placeLabels);
+
 // toolbar
-const $ = id => document.getElementById(id);
 const seg = $("seg");
 Object.keys(D.styles).forEach(k => {
   const b = document.createElement("button");
@@ -657,7 +708,7 @@ playBtn.onclick = () => {
   if (S.t >= 1) S.t = 0;
   S.playing = true; start();
 };
-scrub.oninput = () => { if (S.op < 0) return; S.playing = false; S.t = scrub.value / 1000; draw(); };
+scrub.oninput = () => { if (S.op < 0) return; S.playing = false; S.t = scrub.value / 1000; frame(); ui(); };
 $("tLoop").onclick = () => { S.loop = !S.loop; ui(); };
 $("tGhost").onclick = () => { S.ghost = !S.ghost; draw(); };
 
@@ -680,7 +731,7 @@ function tick(ts) {
     S.t = Math.min(1, S.t + dt / dur);
     if (S.t >= 1) hold = 1.0;
   }
-  draw();
+  frame();
   requestAnimationFrame(tick);
 }
 
@@ -707,19 +758,25 @@ function ui() {
   // animation row
   playBtn.disabled = S.op < 0;
   playBtn.textContent = S.playing ? "Pause" : "Play";
-  scrub.value = Math.round(S.t * 1000);
   sel.value = S.op;
-  if (S.op < 0) {
-    cap.innerHTML = D.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
-    return;
-  }
-  const o = D.ops[S.op];
-  let txt = o.desc + ".";
-  if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating</b>" : " <b>Step 2: reflecting</b>";
-  if (S.t >= 1) txt += ' <span class="ok">Looks the same as before, so it is a symmetry operation.</span>';
-  cap.innerHTML = txt;
+  uiAnim();
 }
 
+// the bits that change every frame: slider and caption
+let lastCap = "";
+function uiAnim() {
+  scrub.value = Math.round(S.t * 1000);
+  let txt = "";
+  if (S.op < 0) {
+    txt = D.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
+  } else {
+    const o = D.ops[S.op];
+    txt = o.desc + ".";
+    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating</b>" : " <b>Step 2: reflecting</b>";
+    if (S.t >= 1) txt += ' <span class="ok">Looks the same as before, so it is a symmetry operation.</span>';
+  }
+  if (txt !== lastCap) { cap.innerHTML = txt; lastCap = txt; }
+}
 v.zoomTo();
 draw();
 </script>
