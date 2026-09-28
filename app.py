@@ -1,6 +1,7 @@
 import json
 import re
 from collections import Counter
+from fractions import Fraction
 
 import numpy as np
 import streamlit as st
@@ -216,33 +217,130 @@ def linear_stuff(pg, coords):
     return axes, normals, types
 
 
+def rodrigues(u, a):
+    # rotation matrix for angle a around axis u
+    K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
+    return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * K @ K
+
+
+def eigvec(R, val):
+    w, v = np.linalg.eig(R)
+    return unit(np.real(v[:, np.argmin(abs(w - val))]))
+
+
+SUBS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+SUPS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def describe_ops(ops, axes, planes):
+    # turn every symmetry op into something the animation can play
+    # C = rotate, s = reflect, i = invert, S = rotate then reflect
+    out = []
+    for op in ops:
+        R = op.rotation_matrix
+        det, tr = np.linalg.det(R), np.trace(R)
+
+        if det < 0 and abs(tr - 1) < 0.1:
+            if not planes:
+                continue
+            # mirror plane, find which one of our planes it is
+            n = eigvec(R, -1)
+            k = int(np.argmax([abs(np.dot(p["n"], n)) for p in planes]))
+            p = planes[k]
+            name = re.sub("<.*?>", "", p["name"])
+            out.append({"kind": "s", "n": p["n"].tolist(), "name": name, "group": "Reflections",
+                        "color": PLANE_COLORS[p["type"]], "sort": (3, k, 0),
+                        "desc": f"Reflect every atom through the {p['name']} plane"})
+            continue
+        if det < 0 and abs(tr + 3) < 0.1:
+            out.append({"kind": "i", "name": "i", "group": "Inversion", "color": "#111827", "sort": (1, 0, 0),
+                        "desc": "Send every atom straight through the center to the opposite side"})
+            continue
+
+        # rotation or improper rotation, both have an axis and an angle
+        if det > 0:
+            u = eigvec(R, 1)
+            Q = R
+        else:
+            u = eigvec(R, -1)
+            Q = R @ (np.eye(3) - 2 * np.outer(u, u))  # take the mirror part off, whats left is a rotation
+        a = rot_angle(Q)
+        if a < 0.1:
+            continue  # this is E
+        if not np.allclose(rodrigues(u, a), Q, atol=0.05):
+            a = -a
+
+        # line the axis up with one from the axes list so C3 and C3² point the same way
+        j = int(np.argmax([abs(np.dot(ax["u"], u)) for ax in axes])) if axes else -1
+        if j >= 0 and np.dot(axes[j]["u"], u) < 0:
+            u, a = -u, -a
+        a = a % (2 * np.pi)
+
+        # angle as a fraction of a full turn gives the n and the power, e.g. 240° = 2/3 turn = C3²
+        f = Fraction(a / (2 * np.pi)).limit_denominator(12)
+        n, k = f.denominator, f.numerator
+        letter = "C" if det > 0 else "S"
+        name = letter + str(n).translate(SUBS) + (str(k).translate(SUPS) if k > 1 else "")
+
+        # say which axis if there is more than one of the same kind
+        # like C₃² (axis 2), or C₂ (on C₄ axis 1) when it sits on a bigger axis, S always says which axis
+        if j >= 0:
+            nax = axes[j]["n"]
+            same = [i for i, ax in enumerate(axes) if ax["n"] == nax]
+            num = f" {same.index(j) + 1}" if len(same) > 1 else ""
+            if nax != n or letter == "S":
+                name += f" (on {axis_name(nax).translate(SUBS)} axis{num})"
+            elif num:
+                name += f" (axis{num})"
+
+        deg = round(np.degrees(a))
+        if letter == "C":
+            desc = f"Rotate {deg}° about the " + (sub(axis_name(axes[j]["n"])) if j >= 0 else "") + " axis"
+            color = AXIS_COLORS.get(n, "#374151")
+        else:
+            desc = f"Rotate {deg}° about the axis, then reflect through the plane perpendicular to it"
+            color = "#0f766e"
+        out.append({"kind": letter, "u": u.tolist(), "a": a, "name": name, "color": color, "desc": desc,
+                    "group": "Rotations" if letter == "C" else "Improper rotations",
+                    "sort": (0 if letter == "C" else 2, -n, int(j >= 0 and axes[j]["n"] != n), j, k)})
+
+    out.sort(key=lambda o: o["sort"])
+    for o in out:
+        del o["sort"]
+    return out
+
+
 # define the viewer to see the molecule
-def viewer(mol, axes, planes, tol, height=540):
+def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     xyz = mol.to(fmt="xyz")
     coords = mol.cart_coords
     size = max(np.linalg.norm(coords, axis=1).max(), 1.0)
 
-    # atom positions + a rough size for each atom so the marker ring fits around it in spacefill too
+    # atom positions, element, and a rough size so the marker ball fits around it in spacefill too
     vdw = {"H": 1.1, "C": 1.7, "N": 1.55, "O": 1.52, "F": 1.47, "Cl": 1.75, "S": 1.8, "P": 1.8, "Br": 1.85}
-    atoms = [{"p": c.tolist(), "r": vdw.get(str(s.specie), 1.8)} for c, s in zip(coords, mol)]
+    atoms = [{"p": c.tolist(), "el": str(s.specie), "r": vdw.get(str(s.specie), 1.8)} for c, s in zip(coords, mol)]
 
-    # make the axes a bit longer than the molecule so u can see them
+    # axes, numbered per order like C₃ axis 1, C₃ axis 2 so u can pick them one by one
+    # atoms on the axis = distance from the axis line less than the tolerance
     ax_data = []
     for ax in axes:
-        p = (ax["u"] * size * 1.3).tolist()
-        ax_data.append({"p": p, "name": axis_name(ax["n"]), "color": AXIS_COLORS.get(ax["n"], "#374151")})
+        u = ax["u"]
+        same = [a for a in axes if a["n"] == ax["n"]]
+        name = axis_name(ax["n"]).translate(SUBS) + " axis"
+        if len(same) > 1:
+            name += f" {[id(a) for a in same].index(id(ax)) + 1}"
+        dist = np.linalg.norm(coords - np.outer(coords @ u, u), axis=1)
+        ax_data.append({"u": u.tolist(), "n": ax["n"], "short": axis_name(ax["n"]), "name": name,
+                        "on": [int(i) for i in np.where(dist < tol)[0]],
+                        "color": AXIS_COLORS.get(ax["n"], "#374151")})
 
-    # planes get drawn as a see-through disc, need 2 vectors lying inside the plane to draw it
+    # planes, atoms on the plane = distance to the plane less than the tolerance
     pl_data = []
     for p in planes:
         n = p["n"]
-        a = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1.0, 0])
-        e1 = unit(a - np.dot(a, n) * n)
-        e2 = np.cross(n, e1)
-        # atoms sitting on the plane = distance to the plane less than the tolerance
         on = [int(i) for i in np.where(abs(coords @ n) < tol)[0]]
-        pl_data.append({"n": n.tolist(), "e1": e1.tolist(), "e2": e2.tolist(), "on": on,
-                        "type": p["type"], "name": p["name"], "color": PLANE_COLORS[p["type"]]})
+        pl_data.append({"n": n.tolist(), "on": on, "type": p["type"], "name": re.sub("<.*?>", "", p["name"]),
+                        "color": PLANE_COLORS[p["type"]]})
 
     # display styles
     styles = {
@@ -251,7 +349,8 @@ def viewer(mol, axes, planes, tol, height=540):
         "Spacefill": {"sphere": {"scale": 0.9}},
     }
 
-    data = {"xyz": xyz, "atoms": atoms, "axes": ax_data, "planes": pl_data, "styles": styles, "R": size * 1.12}
+    data = {"xyz": xyz, "atoms": atoms, "axes": ax_data, "planes": pl_data, "ops": anim_ops, "hasI": bool(has_i),
+            "styles": styles, "R": size * 1.12, "L": size * 1.3}
 
     # 3Dmol does the 3d part, then make it so i can input a file into the 3Dmol
     # the buttons are inside here too so the camera doesnt reset every time u click something
@@ -270,148 +369,345 @@ body {margin:0; background:#fff; color:#111827;}
 .chip {border:1px solid #e5e7eb; background:#fff; border-radius:999px; padding:4px 11px; font-size:12.5px; cursor:pointer;
        color:#374151; display:inline-flex; align-items:center; gap:6px;}
 .chip:hover {border-color:#cbd0d8;}
-.chip:focus-visible, .seg button:focus-visible, .link:focus-visible {outline:2px solid #2563eb; outline-offset:2px;}
+button:focus-visible, select:focus-visible, input:focus-visible {outline:2px solid #2563eb; outline-offset:2px;}
 .chip.off {color:#a1a7b0; background:#fafafa;}
 .chip .d {width:8px; height:8px; border-radius:50%;}
 .chip.off .d {opacity:.25;}
-.chip sub {font-size:9px;}
-.chip .k {color:#9ca3af; font-size:11.5px;}
+select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius:9px; background:#fff; color:#111827;}
+.small {font-size:12.5px; padding:4px 6px;}
 #v {width:100%; height:__H__px; position:relative;}
-.planes {padding:10px 12px; border-top:1px solid #f1f2f4; display:flex; flex-wrap:wrap; gap:6px; align-items:center; max-height:96px; overflow:auto;}
+.row {padding:10px 12px; border-top:1px solid #f1f2f4; display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+.row.dim {opacity:.4; pointer-events:none;}
 .lbl {font-size:12.5px; color:#6b7280; font-weight:500; margin-right:2px;}
-.muted {font-size:12.5px; color:#9ca3af;}
-.link {border:0; background:none; color:#2563eb; font-size:12.5px; cursor:pointer; padding:2px 4px;}
+.muted {font-size:12.5px; color:#6b7280;}
+.step {border:1px solid #e5e7eb; background:#fff; border-radius:9px; width:32px; height:31px; cursor:pointer; font-size:13px; color:#374151;}
+.step:hover {border-color:#cbd0d8;}
+.swatch {display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle;}
+#elSel {min-width:200px;}
+
+.anim {padding:12px; border-top:1px solid #f1f2f4; background:#fafbfc;}
+.anim .row1 {display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
+#opSel {min-width:190px;}
+.play {border:0; background:#111827; color:#fff; border-radius:9px; padding:6px 14px; font-size:13px; font-weight:500; cursor:pointer; min-width:72px;}
+.play:disabled {background:#d1d5db; cursor:default;}
+.anim input[type=range] {flex:1; min-width:140px; accent-color:#111827;}
+.cap {font-size:13px; color:#374151; margin-top:9px; min-height:18px;}
+.cap .ok {color:#15803d; font-weight:500;}
 </style>
 
 <div class="wrap">
   <div class="bar">
     <div class="seg" id="seg"></div>
     <div class="group">
-      <button class="chip" id="tAxes"><span class="d" style="background:#2563eb"></span>Rotation axes</button>
-      <button class="chip" id="tLab">Labels</button>
+      <label class="lbl" for="atLab">Atom labels</label>
+      <select id="atLab" class="small">
+        <option value="off">Off</option>
+        <option value="el">C, H</option>
+        <option value="num">C1, H2</option>
+      </select>
+      <button class="chip" id="tLab">Element labels</button>
       <button class="chip" id="tFill">Plane fill</button>
-      <button class="chip" id="tMark"><span class="d" style="background:#f59e0b"></span>Mark atoms on planes</button>
+      <button class="chip" id="tMark"><span class="d" style="background:#f59e0b"></span>Mark atoms on element</button>
       <button class="chip" id="tReset">Reset view</button>
     </div>
   </div>
   <div id="v"></div>
-  <div class="planes" id="planes"></div>
+  <div class="row" id="elRow">
+    <span class="lbl">Show</span>
+    <select id="elSel" aria-label="Symmetry element to show"></select>
+    <button class="step" id="prev" aria-label="Previous element">◀</button>
+    <button class="step" id="next" aria-label="Next element">▶</button>
+    <span class="muted" id="elInfo"></span>
+  </div>
+  <div class="anim">
+    <div class="row1">
+      <span class="lbl">Animate</span>
+      <select id="opSel"></select>
+      <button class="play" id="play">Play</button>
+      <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Animation progress">
+      <button class="chip" id="tLoop">Loop</button>
+      <button class="chip" id="tGhost">Start positions</button>
+    </div>
+    <div class="cap" id="cap"></div>
+  </div>
 </div>
 
 <script>
 const D = __DATA__;
-const S = {style: Object.keys(D.styles)[0], axes: true, labels: true, fill: true, mark: true,
-           planes: D.planes.map(() => true)};
+const S = {style: Object.keys(D.styles)[0], labels: true, fill: true, mark: true, atomLab: "off",
+           el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
 const v = $3Dmol.createViewer("v", {backgroundColor: "white"});
-v.addModel(D.xyz, "xyz");
+const model = v.addModel(D.xyz, "xyz");
+const atoms = model.selectedAtoms({});
+const P0 = D.atoms.map(a => a.p);
 
+// every symmetry element in one list: axes, then planes, then the inversion center
+const ELS = [];
+// axes sorted biggest order first (C∞ counts as the biggest)
+[...D.axes].sort((a, b) => (b.n || 99) - (a.n || 99)).forEach(a => ELS.push({kind: "axis", name: a.name, color: a.color, u: a.u, short: a.short, on: a.on}));
+D.planes.forEach(p => ELS.push({kind: "plane", name: p.name, color: p.color, n: p.n, short: p.type, on: p.on}));
+if (D.hasI) ELS.push({kind: "i", name: "Inversion center", color: "#111827", on: P0.map((p, i) => i).filter(i => Math.hypot(...P0[i]) < 0.3)});
+
+// small vector math
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const add = (a, b, s = 1) => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 function pt(p) { return {x: p[0], y: p[1], z: p[2]}; }
+function norm(a) { const l = Math.hypot(...a); return mul(a, 1 / l); }
+function basis(n) {
+  const a = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const e1 = norm(add(a, n, -dot(a, n)));
+  return {n: n, e1: e1, e2: cross(n, e1)};
+}
+// rotate p around axis u by angle a (rodrigues)
+function rotate(p, u, a) {
+  const c = Math.cos(a), s = Math.sin(a);
+  return add(add(mul(p, c), cross(u, p), s), u, dot(u, p) * (1 - c));
+}
+// move p towards its mirror image, s = 0 start, s = 1 fully reflected
+function reflect(p, n, s) { return add(p, n, -2 * s * dot(p, n)); }
+const ease = x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 
-// disc (or a ring if r0 > 0) for the mirror plane, both faces so u can see it from any angle
-function disc(p, r0, r1, color, alpha) {
+// where an atom is at time t of the operation
+function pos(p, op, t) {
+  if (op.kind === "C") return rotate(p, op.u, op.a * ease(t));
+  if (op.kind === "s") return reflect(p, op.n, ease(t));
+  if (op.kind === "i") return mul(p, 1 - 2 * ease(t));
+  // S = rotate first half, reflect through the perpendicular plane second half
+  if (t < 0.5) return rotate(p, op.u, op.a * ease(2 * t));
+  return reflect(rotate(p, op.u, op.a), op.u, ease(2 * t - 1));
+}
+
+// disc (or a ring if r0 > 0) for a plane, both faces so u can see it from any angle
+function disc(b, r0, r1, color, alpha) {
   const N = 72, V = [], Nm = [], F = [];
   for (const s of [1, -1]) {
     const off = V.length;
     for (let i = 0; i < N; i++) {
       const t = 2 * Math.PI * i / N, c = Math.cos(t), sn = Math.sin(t);
       for (const r of [r0, r1]) {
-        V.push(pt([0, 1, 2].map(k => r * (c * p.e1[k] + sn * p.e2[k]))));
-        Nm.push(pt(p.n.map(x => s * x)));
+        V.push(pt([0, 1, 2].map(k => r * (c * b.e1[k] + sn * b.e2[k]))));
+        Nm.push(pt(mul(b.n, s)));
       }
     }
     for (let i = 0; i < N; i++) {
-      const a = off + 2 * i, b = a + 1, c2 = off + 2 * ((i + 1) % N), d = c2 + 1;
-      if (s > 0) F.push(a, b, d, a, d, c2); else F.push(a, d, b, a, c2, d);
+      const a = off + 2 * i, bb = a + 1, c2 = off + 2 * ((i + 1) % N), d = c2 + 1;
+      if (s > 0) F.push(a, bb, d, a, d, c2); else F.push(a, d, bb, a, c2, d);
     }
   }
   v.addCustom({vertexArr: V, normalArr: Nm, faceArr: F, color: color, alpha: alpha});
 }
-
+function plane(n, color, text) {
+  const b = basis(n);
+  if (S.fill) disc(b, 0, D.R, color, 0.07);
+  disc(b, D.R * 0.975, D.R, color, 0.9);
+  if (S.labels && text) label(text, pt([0, 1, 2].map(k => D.R * (Math.cos(0.7) * b.e1[k] + Math.sin(0.7) * b.e2[k]))), color);
+}
+function axisLine(u, color, text) {
+  const p = mul(u, D.L);
+  v.addCylinder({start: pt(mul(p, -1)), end: pt(p), radius: 0.07, color: color, fromCap: 1, toCap: 1});
+  if (S.labels && text) label(text, pt(p), color);
+}
+function center(color) {
+  v.addSphere({center: {x: 0, y: 0, z: 0}, radius: 0.18, color: color});
+  if (S.labels) label("i", {x: 0, y: 0, z: 0}, color);
+}
 function label(text, pos, color) {
   v.addLabel(text, {position: pos, fontSize: 12, fontColor: "white", backgroundColor: color,
                     backgroundOpacity: 0.95, inFront: true});
 }
+function atomR(a) { return S.style === "Spacefill" ? a.r * 0.9 : S.style === "Sticks" ? 0.18 : a.r * 0.25; }
+function drawEl(e) {
+  if (e.kind === "axis") axisLine(e.u, e.color, e.short);
+  if (e.kind === "plane") plane(e.n, e.color, e.short);
+  if (e.kind === "i") center(e.color);
+}
+// see-through ball around the atoms that sit on an element, first element wins if an atom is on more than one
+function markAtoms(list) {
+  const done = new Set();
+  list.forEach(e => e.on.forEach(j => {
+    if (done.has(j)) return;
+    done.add(j);
+    v.addSphere({center: pt(P0[j]), radius: atomR(D.atoms[j]) + 0.22, color: e.color, alpha: 0.45});
+  }));
+}
 
 function draw() {
+  // put every atom where it should be right now
+  const op = S.op >= 0 ? D.ops[S.op] : null;
+  const cur = P0.map(p => op ? pos(p, op, S.t) : p);
+  atoms.forEach((a, i) => { a.x = cur[i][0]; a.y = cur[i][1]; a.z = cur[i][2]; });
+
   v.removeAllShapes();
   v.removeAllLabels();
-  v.setStyle({}, D.styles[S.style]);
-  if (S.axes) {
-    for (const a of D.axes) {
-      v.addCylinder({start: pt(a.p.map(x => -x)), end: pt(a.p), radius: 0.07, color: a.color, fromCap: 1, toCap: 1});
-      if (S.labels) label(a.name, pt(a.p), a.color);
-    }
+  v.setStyle({}, D.styles[S.style]);  // this also makes 3Dmol redraw the moved atoms
+
+  if (op) {
+    // animation mode, only show the element that belongs to this operation
+    if (op.kind === "C") axisLine(op.u, op.color, op.name);
+    if (op.kind === "S") { axisLine(op.u, op.color, op.name); plane(op.u, "#94a3b8", ""); }
+    if (op.kind === "s") plane(op.n, op.color, op.name);
+    if (op.kind === "i") center(op.color);
+    // faint copy of where the atoms started, so u can see they end up on top of it
+    if (S.ghost) P0.forEach((p, i) => v.addSphere({center: pt(p), radius: atomR(D.atoms[i]) + 0.05, color: "#9ca3af", alpha: 0.3}));
+  } else {
+    // which elements to show: everything, only axes, only planes, or just one
+    let list;
+    if (S.el === "all") list = ELS;
+    else if (S.el === "axes") list = ELS.filter(e => e.kind === "axis");
+    else if (S.el === "planes") list = ELS.filter(e => e.kind === "plane");
+    else list = [ELS[S.el]];
+    list.forEach(drawEl);
+    // in the all views only mark atoms on planes, otherwise the whole molecule lights up
+    if (S.mark) markAtoms(typeof S.el === "number" ? list : list.filter(e => e.kind === "plane"));
   }
-  // planes: very light fill so the atoms behind are still easy to see, the outline shows where the plane is
-  D.planes.forEach((p, i) => {
-    if (!S.planes[i]) return;
-    if (S.fill) disc(p, 0, D.R, p.color, 0.07);
-    disc(p, D.R * 0.975, D.R, p.color, 0.9);
-    if (S.labels) {
-      const t = 0.7;
-      label(p.type, pt([0, 1, 2].map(k => D.R * (Math.cos(t) * p.e1[k] + Math.sin(t) * p.e2[k]))), p.color);
-    }
-  });
-  // mark the atoms that lie on a shown plane with a see-through ball around them
-  // if an atom is on more than one plane it gets the color of the first one
-  if (S.mark) {
-    const done = new Set();
-    D.planes.forEach((p, i) => {
-      if (!S.planes[i]) return;
-      for (const j of p.on) {
-        if (done.has(j)) continue;
-        done.add(j);
-        const a = D.atoms[j];
-        const r = S.style === "Spacefill" ? a.r * 0.9 : S.style === "Sticks" ? 0.18 : a.r * 0.25;
-        v.addSphere({center: pt(a.p), radius: r + 0.22, color: p.color, alpha: 0.45});
-      }
+
+  // atom labels, they move with the atoms during the animation so u can follow them
+  if (S.atomLab !== "off") {
+    cur.forEach((p, i) => {
+      const el = D.atoms[i].el;
+      const txt = S.atomLab === "el" ? el : el + (i + 1);
+      v.addLabel(txt, {position: pt(p), fontSize: 10, fontColor: "#111827", backgroundColor: "white",
+                       backgroundOpacity: 0.8, borderThickness: 1, borderColor: "#d1d5db", inFront: true,
+                       alignment: "center"});
     });
   }
   v.render();
   ui();
 }
 
-// buttons
-const seg = document.getElementById("seg");
+// toolbar
+const $ = id => document.getElementById(id);
+const seg = $("seg");
 Object.keys(D.styles).forEach(k => {
   const b = document.createElement("button");
   b.textContent = k;
   b.onclick = () => { S.style = k; draw(); };
   seg.appendChild(b);
 });
-document.getElementById("tAxes").onclick = () => { S.axes = !S.axes; draw(); };
-document.getElementById("tLab").onclick = () => { S.labels = !S.labels; draw(); };
-document.getElementById("tFill").onclick = () => { S.fill = !S.fill; draw(); };
-document.getElementById("tMark").onclick = () => { S.mark = !S.mark; draw(); };
-document.getElementById("tReset").onclick = () => { v.zoomTo(); v.render(); };
+$("atLab").onchange = () => { S.atomLab = $("atLab").value; draw(); };
+$("tLab").onclick = () => { S.labels = !S.labels; draw(); };
+$("tFill").onclick = () => { S.fill = !S.fill; draw(); };
+$("tMark").onclick = () => { S.mark = !S.mark; draw(); };
+$("tReset").onclick = () => { v.zoomTo(); v.render(); };
 
-// one chip per plane so u can look at them one by one
-const box = document.getElementById("planes");
-if (D.planes.length === 0) {
-  box.innerHTML = '<span class="muted">No mirror planes in this point group</span>';
+// element picker, the list plus ◀ ▶ to go through them one at a time
+const elSel = $("elSel");
+function opt(parent, value, text) {
+  const o = document.createElement("option");
+  o.value = value; o.textContent = text;
+  parent.appendChild(o);
+}
+if (ELS.length === 0) {
+  opt(elSel, "all", "No symmetry elements");
 } else {
-  box.innerHTML = '<span class="lbl">Mirror planes</span>' +
-    '<button class="link" id="all">Show all</button><button class="link" id="none">Hide all</button>';
-  D.planes.forEach((p, i) => {
-    const b = document.createElement("button");
-    b.className = "chip";
-    b.innerHTML = '<span class="d" style="background:' + p.color + '"></span>' + p.name +
-      ' <span class="k">' + p.on.length + (p.on.length === 1 ? ' atom' : ' atoms') + '</span>';
-    b.title = p.on.length + " atoms lie on this plane";
-    b.onclick = () => { S.planes[i] = !S.planes[i]; draw(); };
-    box.appendChild(b);
-  });
-  document.getElementById("all").onclick = () => { S.planes = S.planes.map(() => true); draw(); };
-  document.getElementById("none").onclick = () => { S.planes = S.planes.map(() => false); draw(); };
+  opt(elSel, "all", "All elements");
+  if (D.axes.length) opt(elSel, "axes", "All axes");
+  if (D.planes.length) opt(elSel, "planes", "All mirror planes");
+  for (const [kind, title] of [["axis", "Axes"], ["plane", "Mirror planes"], ["i", "Other"]]) {
+    const idx = ELS.map((e, i) => i).filter(i => ELS[i].kind === kind);
+    if (!idx.length) continue;
+    const g = document.createElement("optgroup");
+    g.label = title;
+    idx.forEach(i => opt(g, i, ELS[i].name));
+    elSel.appendChild(g);
+  }
+}
+function pick(val) {
+  S.el = (val === "all" || val === "axes" || val === "planes") ? val : +val;
+  draw();
+}
+elSel.onchange = () => pick(elSel.value);
+function stepEl(d) {
+  if (!ELS.length) return;
+  let i = typeof S.el === "number" ? S.el + d : (d > 0 ? 0 : ELS.length - 1);
+  pick((i + ELS.length) % ELS.length);
+}
+$("prev").onclick = () => stepEl(-1);
+$("next").onclick = () => stepEl(1);
+
+// animation controls, the list is grouped like rotations / inversion / reflections
+const sel = $("opSel"), playBtn = $("play"), scrub = $("scrub"), cap = $("cap");
+sel.innerHTML = '<option value="-1">' + (D.ops.length ? "Pick an operation" : "Only E, nothing to animate") + '</option>';
+let og = null, lastGroup = null;
+D.ops.forEach((o, i) => {
+  if (o.group !== lastGroup) { og = document.createElement("optgroup"); og.label = o.group; sel.appendChild(og); lastGroup = o.group; }
+  opt(og, i, o.name);
+});
+sel.onchange = () => {
+  S.op = +sel.value; S.t = 0;
+  S.playing = S.op >= 0;
+  draw();
+  if (S.playing) start();
+};
+playBtn.onclick = () => {
+  if (S.op < 0) return;
+  if (S.playing) { S.playing = false; ui(); return; }
+  if (S.t >= 1) S.t = 0;
+  S.playing = true; start();
+};
+scrub.oninput = () => { if (S.op < 0) return; S.playing = false; S.t = scrub.value / 1000; draw(); };
+$("tLoop").onclick = () => { S.loop = !S.loop; ui(); };
+$("tGhost").onclick = () => { S.ghost = !S.ghost; draw(); };
+
+// the actual animation loop, holds a bit at the end so u can see it matches, then goes again
+let last = null, hold = 0;
+function start() { last = null; hold = 0; requestAnimationFrame(tick); }
+function tick(ts) {
+  if (!S.playing || S.op < 0) return;
+  if (last === null) last = ts;
+  const dt = Math.min((ts - last) / 1000, 0.1);
+  last = ts;
+  const dur = D.ops[S.op].kind === "S" ? 3.4 : 2.2;
+  if (hold > 0) {
+    hold -= dt;
+    if (hold <= 0) {
+      if (S.loop) S.t = 0;
+      else { S.playing = false; ui(); return; }
+    }
+  } else {
+    S.t = Math.min(1, S.t + dt / dur);
+    if (S.t >= 1) hold = 1.0;
+  }
+  draw();
+  requestAnimationFrame(tick);
 }
 
 function ui() {
   [...seg.children].forEach(b => b.classList.toggle("on", b.textContent === S.style));
-  document.getElementById("tAxes").classList.toggle("off", !S.axes);
-  document.getElementById("tLab").classList.toggle("off", !S.labels);
-  document.getElementById("tFill").classList.toggle("off", !S.fill);
-  document.getElementById("tMark").classList.toggle("off", !S.mark);
-  box.querySelectorAll(".chip").forEach((c, i) => c.classList.toggle("off", !S.planes[i]));
+  $("tLab").classList.toggle("off", !S.labels);
+  $("tFill").classList.toggle("off", !S.fill);
+  $("tMark").classList.toggle("off", !S.mark);
+  $("tLoop").classList.toggle("off", !S.loop);
+  $("tGhost").classList.toggle("off", !S.ghost);
+
+  // element row
+  $("elRow").classList.toggle("dim", S.op >= 0);
+  elSel.value = String(S.el);
+  const info = $("elInfo");
+  if (S.op >= 0) info.textContent = 'Choose "Pick an operation" below to go back';
+  else if (typeof S.el === "number") {
+    const e = ELS[S.el], n = e.on.length;
+    const where = e.kind === "axis" ? "on this axis" : e.kind === "plane" ? "on this plane" : "at the center";
+    info.innerHTML = '<span class="swatch" style="background:' + e.color + '"></span>' +
+      (S.el + 1) + " of " + ELS.length + ", " + n + (n === 1 ? " atom " : " atoms ") + where;
+  } else info.textContent = ELS.length ? ELS.length + " elements, use ◀ ▶ to see them one at a time" : "";
+
+  // animation row
+  playBtn.disabled = S.op < 0;
+  playBtn.textContent = S.playing ? "Pause" : "Play";
+  scrub.value = Math.round(S.t * 1000);
+  sel.value = S.op;
+  if (S.op < 0) {
+    cap.innerHTML = D.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
+    return;
+  }
+  const o = D.ops[S.op];
+  let txt = o.desc + ".";
+  if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating</b>" : " <b>Step 2: reflecting</b>";
+  if (S.t >= 1) txt += ' <span class="ok">Looks the same as before, so it is a symmetry operation.</span>';
+  cap.innerHTML = txt;
 }
 
 v.zoomTo();
@@ -419,7 +715,7 @@ draw();
 </script>
 """
     html = html.replace("__H__", str(height)).replace("__DATA__", json.dumps(data))
-    components.html(html, height=height + 170)
+    components.html(html, height=height + 250)
 
 
 # title
@@ -489,7 +785,7 @@ if "*" not in pg:
 left, right = st.columns([3, 1.3], gap="large")
 
 with left:
-    viewer(cmol, axes, planes, tol)
+    viewer(cmol, axes, planes, tol, describe_ops(ops, axes, planes), counts.get("i"))
 
 with right:
     # the main thing, the point group
