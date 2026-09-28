@@ -310,6 +310,16 @@ def describe_ops(ops, axes, planes):
     return out
 
 
+def atom_labels(mol):
+    # number each element separately, C1 C2 C3 ... H1 H2 H3 ..., in the same order as the xyz file
+    count, labs = Counter(), []
+    for s in mol:
+        el = str(s.specie)
+        count[el] += 1
+        labs.append(f"{el}{count[el]}")
+    return labs
+
+
 # define the viewer to see the molecule
 def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     xyz = mol.to(fmt="xyz")
@@ -318,7 +328,8 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
 
     # atom positions, element, and a rough size so the marker ball fits around it in spacefill too
     vdw = {"H": 1.1, "C": 1.7, "N": 1.55, "O": 1.52, "F": 1.47, "Cl": 1.75, "S": 1.8, "P": 1.8, "Br": 1.85}
-    atoms = [{"p": c.tolist(), "el": str(s.specie), "r": vdw.get(str(s.specie), 1.8)} for c, s in zip(coords, mol)]
+    atoms = [{"p": c.tolist(), "el": str(s.specie), "lab": lab, "r": vdw.get(str(s.specie), 1.8)}
+             for c, s, lab in zip(coords, mol, atom_labels(mol))]
 
     # axes, numbered per order like C₃ axis 1, C₃ axis 2 so u can pick them one by one
     # atoms on the axis = distance from the axis line less than the tolerance
@@ -403,7 +414,7 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
       <select id="atLab" class="small">
         <option value="off">Off</option>
         <option value="el">C, H</option>
-        <option value="num">C1, H2</option>
+        <option value="num">C1, C2 … H1, H2</option>
       </select>
       <button class="chip" id="tLab">Element labels</button>
       <button class="chip" id="tFill">Plane fill</button>
@@ -566,8 +577,7 @@ function draw() {
   // atom labels, they move with the atoms during the animation so u can follow them
   if (S.atomLab !== "off") {
     cur.forEach((p, i) => {
-      const el = D.atoms[i].el;
-      const txt = S.atomLab === "el" ? el : el + (i + 1);
+      const txt = S.atomLab === "el" ? D.atoms[i].el : D.atoms[i].lab;
       v.addLabel(txt, {position: pt(p), fontSize: 10, fontColor: "#111827", backgroundColor: "white",
                        backgroundOpacity: 0.8, borderThickness: 1, borderColor: "#d1d5db", inFront: true,
                        alignment: "center"});
@@ -838,7 +848,7 @@ with right:
     # coordinates in a dropdown so it doesnt take the whole page
     with st.expander("Coordinates (centered)"):
         st.dataframe(
-            {"atom": [str(s.specie) for s in cmol],
+            {"atom": atom_labels(cmol),
              "x": cmol.cart_coords[:, 0].round(4),
              "y": cmol.cart_coords[:, 1].round(4),
              "z": cmol.cart_coords[:, 2].round(4)},
