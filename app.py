@@ -228,8 +228,6 @@ def eigvec(R, val):
     return unit(np.real(v[:, np.argmin(abs(w - val))]))
 
 
-SUBS = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
-SUPS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
 def describe_ops(ops, axes, planes):
@@ -247,8 +245,7 @@ def describe_ops(ops, axes, planes):
             n = eigvec(R, -1)
             k = int(np.argmax([abs(np.dot(p["n"], n)) for p in planes]))
             p = planes[k]
-            name = re.sub("<.*?>", "", p["name"])
-            out.append({"kind": "s", "n": p["n"].tolist(), "name": name, "group": "Reflections",
+            out.append({"kind": "s", "n": p["n"].tolist(), "name": p["name"], "group": "Reflections",
                         "color": PLANE_COLORS[p["type"]], "sort": (3, k, 0),
                         "desc": f"Reflect every atom through the {p['name']} plane"})
             continue
@@ -280,7 +277,10 @@ def describe_ops(ops, axes, planes):
         f = Fraction(a / (2 * np.pi)).limit_denominator(12)
         n, k = f.denominator, f.numerator
         letter = "C" if det > 0 else "S"
-        name = letter + str(n).translate(SUBS) + (str(k).translate(SUPS) if k > 1 else "")
+        # names are html so the subscripts come out properly, like C<sub>3</sub><sup>2</sup>
+        # power on top of the subscript like in the textbook: C with 2 over 3
+        name = f"{letter}<sub>{n}</sub>" if k == 1 else f"{letter}<span class='ss'><sup>{k}</sup><sub>{n}</sub></span>"
+        tag = name  # short version for the label in the 3d view
 
         # say which axis if there is more than one of the same kind
         # like C₃² (axis 2), or C₂ (on C₄ axis 1) when it sits on a bigger axis, S always says which axis
@@ -289,7 +289,7 @@ def describe_ops(ops, axes, planes):
             same = [i for i, ax in enumerate(axes) if ax["n"] == nax]
             num = f" {same.index(j) + 1}" if len(same) > 1 else ""
             if nax != n or letter == "S":
-                name += f" (on {axis_name(nax).translate(SUBS)} axis{num})"
+                name += f" (on {sub(axis_name(nax))} axis{num})"
             elif num:
                 name += f" (axis{num})"
 
@@ -300,7 +300,7 @@ def describe_ops(ops, axes, planes):
         else:
             desc = f"Rotate {deg}° about the axis, then reflect through the plane perpendicular to it"
             color = "#0f766e"
-        out.append({"kind": letter, "u": u.tolist(), "a": a, "name": name, "color": color, "desc": desc,
+        out.append({"kind": letter, "u": u.tolist(), "a": a, "name": name, "tag": tag, "color": color, "desc": desc,
                     "group": "Rotations" if letter == "C" else "Improper rotations",
                     "sort": (0 if letter == "C" else 2, -n, int(j >= 0 and axes[j]["n"] != n), j, k)})
 
@@ -348,11 +348,11 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     for ax in axes:
         u = ax["u"]
         same = [a for a in axes if a["n"] == ax["n"]]
-        name = axis_name(ax["n"]).translate(SUBS) + " axis"
+        name = sub(axis_name(ax["n"])) + " axis"
         if len(same) > 1:
             name += f" {[id(a) for a in same].index(id(ax)) + 1}"
         dist = np.linalg.norm(coords - np.outer(coords @ u, u), axis=1)
-        ax_data.append({"u": u.tolist(), "n": ax["n"], "short": axis_name(ax["n"]), "name": name,
+        ax_data.append({"u": u.tolist(), "n": ax["n"], "short": sub(axis_name(ax["n"])), "name": name,
                         "on": [int(i) for i in np.where(dist < tol)[0]],
                         "color": AXIS_COLORS.get(ax["n"], "#374151")})
 
@@ -361,7 +361,7 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     for p in planes:
         n = p["n"]
         on = [int(i) for i in np.where(abs(coords @ n) < tol)[0]]
-        pl_data.append({"n": n.tolist(), "on": on, "type": p["type"], "name": re.sub("<.*?>", "", p["name"]),
+        pl_data.append({"n": n.tolist(), "on": on, "type": p["type"], "short": sub(p["type"]), "name": p["name"],
                         "color": PLANE_COLORS[p["type"]]})
 
     # display styles
@@ -403,6 +403,27 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
 .al {position:absolute; left:0; top:0; font-size:11px; font-weight:600; line-height:13px; white-space:nowrap;
      will-change:transform; color:#111827; text-shadow:0 0 2px rgba(255,255,255,.9), 0 0 1px rgba(255,255,255,.9);}
 .al.dk {color:#fff; text-shadow:0 0 2px rgba(0,0,0,.75), 0 0 1px rgba(0,0,0,.75);}
+.tag {position:absolute; left:0; top:0; font-size:12px; font-weight:600; color:#fff; padding:1px 7px 2px; border-radius:6px;
+      white-space:nowrap; will-change:transform; z-index:2;}
+sub, sup {font-size:.72em; line-height:0;}
+.ss {display:inline-flex; flex-direction:column; vertical-align:middle; font-size:.7em; line-height:1; margin-left:1px;}
+.ss sup, .ss sub {font-size:1em; line-height:1; vertical-align:baseline;}
+
+/* dropdown made by hand, the normal one cant show subscripts */
+.dd {position:relative; display:inline-block;}
+.dd-btn {display:inline-flex; align-items:center; justify-content:space-between; gap:12px; min-width:200px; font-size:13px;
+         padding:6px 10px; border:1px solid #e5e7eb; border-radius:9px; background:#fff; color:#111827; cursor:pointer; text-align:left;}
+.dd-btn:hover {border-color:#cbd0d8;}
+.dd-caret {color:#9ca3af; font-size:11px;}
+.dd-menu {display:none; position:absolute; left:0; top:calc(100% + 4px); z-index:20; min-width:100%; max-height:280px; overflow:auto;
+          background:#fff; border:1px solid #e5e7eb; border-radius:10px; box-shadow:0 8px 24px rgba(16,24,40,.12); padding:4px;}
+.dd.up .dd-menu {top:auto; bottom:calc(100% + 4px);}
+.dd.open .dd-menu {display:block;}
+.dd-group {font-size:11.5px; color:#6b7280; font-weight:600; padding:8px 10px 4px;}
+.dd-item {display:block; width:100%; text-align:left; border:0; background:none; padding:6px 10px; font-size:13px;
+          border-radius:7px; cursor:pointer; color:#111827; white-space:nowrap;}
+.dd-item:hover, .dd-item:focus-visible {background:#f3f4f6;}
+.dd-item.sel {background:#eef2ff; font-weight:500;}
 .row {padding:10px 12px; border-top:1px solid #f1f2f4; display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
 .row.dim {opacity:.4; pointer-events:none;}
 .lbl {font-size:12.5px; color:#6b7280; font-weight:500; margin-right:2px;}
@@ -441,7 +462,7 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
   <div id="vwrap"><div id="v"></div><div id="alabs"></div></div>
   <div class="row" id="elRow">
     <span class="lbl">Show</span>
-    <select id="elSel" aria-label="Symmetry element to show"></select>
+    <div class="dd" id="elSel"></div>
     <button class="step" id="prev" aria-label="Previous element">◀</button>
     <button class="step" id="next" aria-label="Next element">▶</button>
     <span class="muted" id="elInfo"></span>
@@ -449,7 +470,7 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
   <div class="anim">
     <div class="row1">
       <span class="lbl">Animate</span>
-      <select id="opSel"></select>
+      <div class="dd" id="opSel"></div>
       <button class="play" id="play">Play</button>
       <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Animation progress">
       <button class="chip" id="tLoop">Loop</button>
@@ -481,7 +502,7 @@ function ghostStyle() {
 const ELS = [];
 // axes sorted biggest order first (C∞ counts as the biggest)
 [...D.axes].sort((a, b) => (b.n || 99) - (a.n || 99)).forEach(a => ELS.push({kind: "axis", name: a.name, color: a.color, u: a.u, short: a.short, on: a.on}));
-D.planes.forEach(p => ELS.push({kind: "plane", name: p.name, color: p.color, n: p.n, short: p.type, on: p.on}));
+D.planes.forEach(p => ELS.push({kind: "plane", name: p.name, color: p.color, n: p.n, short: p.short, on: p.on}));
 if (D.hasI) ELS.push({kind: "i", name: "Inversion center", color: "#111827", on: P0.map((p, i) => i).filter(i => Math.hypot(...P0[i]) < 0.3)});
 
 // small vector math
@@ -541,12 +562,12 @@ function plane(n, color, text, strong) {
   if (S.fill) {
     disc(b, 0, D.R, color, strong ? 0.2 : 0.08);
     if (strong) {
-      const k = 4;
+      const k = 8;  // grid lines every 1/8 of the radius
       for (let i = -k + 1; i < k; i++) {
         const d = D.R * i / k, h = Math.sqrt(D.R * D.R - d * d);
         for (const [e, f] of [[b.e1, b.e2], [b.e2, b.e1]]) {
           v.addCylinder({start: pt(add(mul(e, d), f, -h)), end: pt(add(mul(e, d), f, h)),
-                         radius: 0.025, color: color, alpha: 0.55, fromCap: 1, toCap: 1});
+                         radius: 0.015, color: color, alpha: 0.45, fromCap: 1, toCap: 1});
         }
       }
     }
@@ -563,10 +584,9 @@ function center(color) {
   v.addSphere({center: {x: 0, y: 0, z: 0}, radius: 0.18, color: color});
   if (S.labels) label("i", {x: 0, y: 0, z: 0}, color);
 }
-function label(text, pos, color) {
-  v.addLabel(text, {position: pos, fontSize: 12, fontColor: "white", backgroundColor: color,
-                    backgroundOpacity: 0.95, inFront: true});
-}
+// element labels are html too (like the atom labels) so C<sub>3</sub> and σ<sub>h</sub> get real subscripts
+let tags = [];
+function label(html, pos, color) { tags.push({html: html, pos: pos, color: color}); }
 function atomR(a) { return S.style === "Spacefill" ? a.r * 0.9 : S.style === "Sticks" ? 0.18 : a.r * 0.25; }
 function drawEl(e) {
   if (e.kind === "axis") axisLine(e.u, e.color, e.short);
@@ -589,12 +609,13 @@ function draw() {
   const op = S.op >= 0 ? D.ops[S.op] : null;
   v.removeAllShapes();
   v.removeAllLabels();
+  tags = [];
   ghost.setStyle({}, op && S.ghost ? ghostStyle() : {});
 
   if (op) {
     // animation mode, only show the element that belongs to this operation
-    if (op.kind === "C") axisLine(op.u, op.color, op.name);
-    if (op.kind === "S") { axisLine(op.u, op.color, op.name); plane(op.u, "#64748b", "", true); }
+    if (op.kind === "C") axisLine(op.u, op.color, op.tag);
+    if (op.kind === "S") { axisLine(op.u, op.color, op.tag); plane(op.u, "#64748b", "", true); }
     if (op.kind === "s") plane(op.n, op.color, op.name, true);
     if (op.kind === "i") center(op.color);
   } else {
@@ -636,30 +657,40 @@ function frame() {
 // atom labels are normal html on top of the 3d view, moving them is basically free
 // compared to making 120 new 3Dmol labels every frame (that was what made it laggy)
 const lbox = $("alabs");
-let lspans = [];
+let lspans = [], tspans = [];
 function buildLabels() {
   lbox.innerHTML = "";
   lspans = [];
-  if (S.atomLab === "off") return;
-  D.atoms.forEach(a => {
+  tspans = [];
+  if (S.atomLab !== "off") D.atoms.forEach(a => {
     const s = document.createElement("span");
     s.className = a.light ? "al" : "al dk";
     s.textContent = S.atomLab === "el" ? a.el : a.lab;
     lbox.appendChild(s);
     lspans.push(s);
   });
+  tags.forEach(t => {
+    const s = document.createElement("span");
+    s.className = "tag";
+    s.style.background = t.color;
+    s.innerHTML = t.html;
+    lbox.appendChild(s);
+    tspans.push(s);
+  });
   placeLabels();
 }
 function placeLabels() {
-  if (!lspans.length) return;
+  if (!lspans.length && !tspans.length) return;
   const cv = $("v").querySelector("canvas");
   if (!cv) return;
   const r = cv.getBoundingClientRect();
   const left = r.left + window.pageXOffset - document.documentElement.clientLeft;
   const top = r.top + window.pageYOffset - document.documentElement.clientTop;
-  const sc = v.modelToScreen(atoms.map(a => ({x: a.x, y: a.y, z: a.z})));
+  const pts = (lspans.length ? atoms.map(a => ({x: a.x, y: a.y, z: a.z})) : []).concat(tags.map(t => t.pos));
+  const sc = v.modelToScreen(pts);
+  const spans = lspans.concat(tspans);
   sc.forEach((p, i) => {
-    lspans[i].style.transform = "translate(" + (p.x - left) + "px," + (p.y - top) + "px) translate(-50%,-50%)";
+    spans[i].style.transform = "translate(" + (p.x - left) + "px," + (p.y - top) + "px) translate(-50%,-50%)";
   });
 }
 // 3Dmol calls this after every render, so labels follow when u rotate/zoom too
@@ -679,33 +710,67 @@ $("tFill").onclick = () => { S.fill = !S.fill; draw(); };
 $("tMark").onclick = () => { S.mark = !S.mark; draw(); };
 $("tReset").onclick = () => { v.zoomTo(); v.render(); };
 
-// element picker, the list plus ◀ ▶ to go through them one at a time
-const elSel = $("elSel");
-function opt(parent, value, text) {
-  const o = document.createElement("option");
-  o.value = value; o.textContent = text;
-  parent.appendChild(o);
+// dropdown that can show html (subscripts), groups = [{title, items: [{value, html}]}]
+function makeDD(root, groups, onPick) {
+  root.innerHTML = '<button type="button" class="dd-btn" aria-haspopup="listbox"><span class="dd-val"></span>' +
+                   '<span class="dd-caret">▾</span></button><div class="dd-menu" role="listbox"></div>';
+  const btn = root.querySelector(".dd-btn"), menu = root.querySelector(".dd-menu"), val = root.querySelector(".dd-val");
+  const byVal = {};
+  groups.forEach(g => {
+    if (g.title) {
+      const h = document.createElement("div");
+      h.className = "dd-group"; h.textContent = g.title;
+      menu.appendChild(h);
+    }
+    g.items.forEach(it => {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "dd-item"; b.innerHTML = it.html;
+      b.onclick = () => { root.classList.remove("open"); onPick(it.value); };
+      menu.appendChild(b);
+      byVal[String(it.value)] = {it: it, b: b};
+    });
+  });
+  btn.onclick = ev => {
+    ev.stopPropagation();
+    const opening = !root.classList.contains("open");
+    closeDDs();
+    if (!opening) return;
+    // open upwards if there is no room below (the viewer is above, so there always is room there)
+    const r = btn.getBoundingClientRect();
+    root.classList.toggle("up", window.innerHeight - r.bottom < 300);
+    root.classList.add("open");
+    const cur = menu.querySelector(".sel");
+    if (cur && cur.scrollIntoView) cur.scrollIntoView({block: "nearest"});
+  };
+  return {set(v) {
+    const x = byVal[String(v)];
+    val.innerHTML = x ? x.it.html : "";
+    Object.values(byVal).forEach(o => o.b.classList.toggle("sel", o === x));
+  }};
 }
+function closeDDs() { document.querySelectorAll(".dd.open").forEach(d => d.classList.remove("open")); }
+document.addEventListener("click", closeDDs);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDDs(); });
+
+// element picker, the list plus ◀ ▶ to go through them one at a time
+const elGroups = [];
 if (ELS.length === 0) {
-  opt(elSel, "all", "No symmetry elements");
+  elGroups.push({title: null, items: [{value: "all", html: "No symmetry elements"}]});
 } else {
-  opt(elSel, "all", "All elements");
-  if (D.axes.length) opt(elSel, "axes", "All axes");
-  if (D.planes.length) opt(elSel, "planes", "All mirror planes");
+  const top = [{value: "all", html: "All elements"}];
+  if (D.axes.length) top.push({value: "axes", html: "All axes"});
+  if (D.planes.length) top.push({value: "planes", html: "All mirror planes"});
+  elGroups.push({title: null, items: top});
   for (const [kind, title] of [["axis", "Axes"], ["plane", "Mirror planes"], ["i", "Other"]]) {
     const idx = ELS.map((e, i) => i).filter(i => ELS[i].kind === kind);
-    if (!idx.length) continue;
-    const g = document.createElement("optgroup");
-    g.label = title;
-    idx.forEach(i => opt(g, i, ELS[i].name));
-    elSel.appendChild(g);
+    if (idx.length) elGroups.push({title: title, items: idx.map(i => ({value: i, html: ELS[i].name}))});
   }
 }
 function pick(val) {
   S.el = (val === "all" || val === "axes" || val === "planes") ? val : +val;
   draw();
 }
-elSel.onchange = () => pick(elSel.value);
+const elDD = makeDD($("elSel"), elGroups, pick);
 function stepEl(d) {
   if (!ELS.length) return;
   let i = typeof S.el === "number" ? S.el + d : (d > 0 ? 0 : ELS.length - 1);
@@ -715,19 +780,20 @@ $("prev").onclick = () => stepEl(-1);
 $("next").onclick = () => stepEl(1);
 
 // animation controls, the list is grouped like rotations / inversion / reflections
-const sel = $("opSel"), playBtn = $("play"), scrub = $("scrub"), cap = $("cap");
-sel.innerHTML = '<option value="-1">' + (D.ops.length ? "Pick an operation" : "Only E, nothing to animate") + '</option>';
-let og = null, lastGroup = null;
+const playBtn = $("play"), scrub = $("scrub"), cap = $("cap");
+const opGroups = [{title: null, items: [{value: -1, html: D.ops.length ? "Pick an operation" : "Only E, nothing to animate"}]}];
 D.ops.forEach((o, i) => {
-  if (o.group !== lastGroup) { og = document.createElement("optgroup"); og.label = o.group; sel.appendChild(og); lastGroup = o.group; }
-  opt(og, i, o.name);
+  let g = opGroups[opGroups.length - 1];
+  if (g.title !== o.group) { g = {title: o.group, items: []}; opGroups.push(g); }
+  g.items.push({value: i, html: o.name});
 });
-sel.onchange = () => {
-  S.op = +sel.value; S.t = 0;
+function pickOp(i) {
+  S.op = +i; S.t = 0;
   S.playing = S.op >= 0;
   draw();
   if (S.playing) start();
-};
+}
+const opDD = makeDD($("opSel"), opGroups, pickOp);
 playBtn.onclick = () => {
   if (S.op < 0) return;
   if (S.playing) { S.playing = false; ui(); return; }
@@ -771,7 +837,7 @@ function ui() {
 
   // element row
   $("elRow").classList.toggle("dim", S.op >= 0);
-  elSel.value = String(S.el);
+  elDD.set(S.el);
   const info = $("elInfo");
   if (S.op >= 0) info.textContent = 'Choose "Pick an operation" below to go back';
   else if (typeof S.el === "number") {
@@ -784,7 +850,7 @@ function ui() {
   // animation row
   playBtn.disabled = S.op < 0;
   playBtn.textContent = S.playing ? "Pause" : "Play";
-  sel.value = S.op;
+  opDD.set(S.op);
   uiAnim();
 }
 
