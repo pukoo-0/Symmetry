@@ -328,7 +328,18 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
 
     # atom positions, element, and a rough size so the marker ball fits around it in spacefill too
     vdw = {"H": 1.1, "C": 1.7, "N": 1.55, "O": 1.52, "F": 1.47, "Cl": 1.75, "S": 1.8, "P": 1.8, "Br": 1.85}
-    atoms = [{"p": c.tolist(), "el": str(s.specie), "lab": lab, "r": vdw.get(str(s.specie), 1.8)}
+    # atom colors 3Dmol uses (rasmol), so the label text can be dark on light atoms and white on dark ones
+    colors = {"H": "ffffff", "B": "00ff00", "C": "c8c8c8", "N": "8f8fff", "O": "f00000", "F": "daa520",
+              "Na": "0000ff", "Mg": "228b22", "Si": "daa520", "P": "ffa500", "S": "ffc832", "Cl": "00ff00",
+              "Fe": "ffa500", "Cu": "a52a2a", "Zn": "a52a2a", "Br": "a52a2a", "I": "a020f0"}
+
+    def light(el):
+        h = colors.get(el, "ff1493")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return 0.299 * r + 0.587 * g + 0.114 * b > 150
+
+    atoms = [{"p": c.tolist(), "el": str(s.specie), "lab": lab, "r": vdw.get(str(s.specie), 1.8),
+              "light": light(str(s.specie))}
              for c, s, lab in zip(coords, mol, atom_labels(mol))]
 
     # axes, numbered per order like C₃ axis 1, C₃ axis 2 so u can pick them one by one
@@ -389,8 +400,9 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
 #vwrap {position:relative;}
 #v {width:100%; height:__H__px; position:relative;}
 #alabs {position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:5;}
-.al {position:absolute; left:0; top:0; font-size:10.5px; line-height:14px; padding:0 3px; background:rgba(255,255,255,.85);
-     border:1px solid #d1d5db; border-radius:4px; color:#111827; white-space:nowrap; will-change:transform;}
+.al {position:absolute; left:0; top:0; font-size:11px; font-weight:600; line-height:13px; white-space:nowrap;
+     will-change:transform; color:#111827; text-shadow:0 0 2px rgba(255,255,255,.9), 0 0 1px rgba(255,255,255,.9);}
+.al.dk {color:#fff; text-shadow:0 0 2px rgba(0,0,0,.75), 0 0 1px rgba(0,0,0,.75);}
 .row {padding:10px 12px; border-top:1px solid #f1f2f4; display:flex; flex-wrap:wrap; gap:8px; align-items:center;}
 .row.dim {opacity:.4; pointer-events:none;}
 .lbl {font-size:12.5px; color:#6b7280; font-weight:500; margin-right:2px;}
@@ -522,10 +534,24 @@ function disc(b, r0, r1, color, alpha) {
   }
   v.addCustom({vertexArr: V, normalArr: Nm, faceArr: F, color: color, alpha: alpha});
 }
-function plane(n, color, text) {
+// strong = only this plane is on screen, so it gets a darker fill and grid lines
+// the grid lines make it easy to tell where the plane is from any angle, even face on
+function plane(n, color, text, strong) {
   const b = basis(n);
-  if (S.fill) disc(b, 0, D.R, color, 0.07);
-  disc(b, D.R * 0.975, D.R, color, 0.9);
+  if (S.fill) {
+    disc(b, 0, D.R, color, strong ? 0.2 : 0.08);
+    if (strong) {
+      const k = 4;
+      for (let i = -k + 1; i < k; i++) {
+        const d = D.R * i / k, h = Math.sqrt(D.R * D.R - d * d);
+        for (const [e, f] of [[b.e1, b.e2], [b.e2, b.e1]]) {
+          v.addCylinder({start: pt(add(mul(e, d), f, -h)), end: pt(add(mul(e, d), f, h)),
+                         radius: 0.025, color: color, alpha: 0.55, fromCap: 1, toCap: 1});
+        }
+      }
+    }
+  }
+  disc(b, D.R * 0.96, D.R, color, 1);
   if (S.labels && text) label(text, pt([0, 1, 2].map(k => D.R * (Math.cos(0.7) * b.e1[k] + Math.sin(0.7) * b.e2[k]))), color);
 }
 function axisLine(u, color, text) {
@@ -544,7 +570,7 @@ function label(text, pos, color) {
 function atomR(a) { return S.style === "Spacefill" ? a.r * 0.9 : S.style === "Sticks" ? 0.18 : a.r * 0.25; }
 function drawEl(e) {
   if (e.kind === "axis") axisLine(e.u, e.color, e.short);
-  if (e.kind === "plane") plane(e.n, e.color, e.short);
+  if (e.kind === "plane") plane(e.n, e.color, e.short, typeof S.el === "number");
   if (e.kind === "i") center(e.color);
 }
 // see-through ball around the atoms that sit on an element, first element wins if an atom is on more than one
@@ -568,8 +594,8 @@ function draw() {
   if (op) {
     // animation mode, only show the element that belongs to this operation
     if (op.kind === "C") axisLine(op.u, op.color, op.name);
-    if (op.kind === "S") { axisLine(op.u, op.color, op.name); plane(op.u, "#94a3b8", ""); }
-    if (op.kind === "s") plane(op.n, op.color, op.name);
+    if (op.kind === "S") { axisLine(op.u, op.color, op.name); plane(op.u, "#64748b", "", true); }
+    if (op.kind === "s") plane(op.n, op.color, op.name, true);
     if (op.kind === "i") center(op.color);
   } else {
     // which elements to show: everything, only axes, only planes, or just one
@@ -617,7 +643,7 @@ function buildLabels() {
   if (S.atomLab === "off") return;
   D.atoms.forEach(a => {
     const s = document.createElement("span");
-    s.className = "al";
+    s.className = a.light ? "al" : "al dk";
     s.textContent = S.atomLab === "el" ? a.el : a.lab;
     lbox.appendChild(s);
     lspans.push(s);
