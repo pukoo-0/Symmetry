@@ -54,112 +54,157 @@ header[data-testid="stHeader"] {background:transparent;}
 </style>
 """, unsafe_allow_html=True)
 
-# axis colors, C2 blue C3 red C4 green etc etc (0 = C∞ for linear stuff)
-AXIS_COLORS = {0: "#111827", 2: "#2563eb", 3: "#dc2626", 4: "#16a34a", 5: "#9333ea", 6: "#ea580c"}
+# axis colors, C2 blue C3 red C4 green C5 purple C6 orange (0 = C∞ for linear stuff)
+AXIS_COLORS = {
+    0: "#111827", 2: "#2563eb", 3: "#dc2626", 4: "#16a34a",
+    5: "#9333ea", 6: "#ea580c", 7: "#0891b2", 8: "#db2777"
+}
+AXIS_SUBTYPE_COLORS = {"C2": "#2563eb", "C2'": "#3b82f6", "C2''": "#60a5fa"}
 # plane colors
 PLANE_COLORS = {"σh": "#f59e0b", "σv": "#14b8a6", "σv'": "#0ea5e9", "σd": "#ec4899", "σ": "#6366f1"}
 PLANE_ORDER = ["σh", "σv", "σv'", "σd", "σ"]
 
 
 def sub(s):
-    # turns C2v into C<sub>2v</sub> because its textbook symmetry
     s = s.replace("*", "∞")
     if len(s) == 1:
         return s
+    m = re.match(r"^([A-Za-zσ]+)(.+?)('+)?$", s)
+    if m:
+        base, sub_part, primes = m.group(1), m.group(2), m.group(3) or ""
+        return f"{base}<sub>{sub_part}</sub>{primes}"
     return s[0] + "<sub>" + s[1:] + "</sub>"
 
 
-def axis_name(n):
+def axis_name(n, subtype=None):
+    if subtype:
+        return subtype
     return "C∞" if n == 0 else f"C{n}"
 
 
 def unit(x):
-    return x / np.linalg.norm(x)
+    norm = np.linalg.norm(x)
+    return x / norm if norm > 1e-12 else np.array([0.0, 0.0, 1.0])
 
 
-# rotation angle from the matrix using the trace
+def clean_ops(ops, atol=5e-2):
+    """
+    Project noisy pymatgen symmetry matrices onto exact O(3) via SVD
+    and deduplicate them so high-symmetry groups (Ih, Oh, D6h) have exact order h.
+    """
+    unique_matrices = []
+    for op in ops:
+        R = op.rotation_matrix
+        U, _, Vt = np.linalg.svd(R)
+        R_exact = U @ Vt
+        if not any(np.allclose(R_exact, M, atol=atol) for M in unique_matrices):
+            unique_matrices.append(R_exact)
+    return unique_matrices
+
+
 def rot_angle(R):
-    return np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))
+    return float(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))
 
 
-def count_ops(ops):
-    # sort the operations into E, Cn, i, Sn, sigma
-    # det > 0 is a normal rotation, det < 0 means theres a mirror in it
-    c = Counter()
-    for op in ops:
-        R = op.rotation_matrix
-        if np.linalg.det(R) > 0:
-            a = rot_angle(R)
-            c["E" if a < 0.1 else "C" + str(round(2 * np.pi / a))] += 1
-        else:
-            a = np.arccos(np.clip((np.trace(R) + 1) / 2, -1, 1))
-            if a < 0.1:
-                c["σ"] += 1
-            elif abs(a - np.pi) < 0.1:
-                c["i"] += 1
-            else:
-                c["S" + str(round(2 * np.pi / a))] += 1
-    return c
+def angle_to_order(a, max_denom=24):
+    f = Fraction(float(a) / (2.0 * np.pi)).limit_denominator(max_denom)
+    return f.denominator, f.numerator
 
 
-# makes the E, 8C3, 3C2 thing like the top of the character table
-def ops_string(c):
-    # E first, sigma last, same order as it was in symmetry
-    def key(k):
-        if k == "E": return (0, 0)
-        if k[0] == "C": return (1, -int(k[1:]))
-        if k == "i": return (2, 0)
-        if k[0] == "S": return (3, -int(k[1:]))
-        return (4, PLANE_ORDER.index(k))
-    out = []
-    for k in sorted(c, key=key):
-        n = c[k] if c[k] > 1 else ""
-        out.append(f"{n}{sub(k) if k[0] in 'CSσ' else k}")
-    return ", ".join(out)
+def extract_axis(Q):
+    a = rot_angle(Q)
+    if a < 1e-3:
+        return np.array([0.0, 0.0, 1.0])
+    if abs(a - np.pi) > 1e-2:
+        skew = np.array([Q[2, 1] - Q[1, 2], Q[0, 2] - Q[2, 0], Q[1, 0] - Q[0, 1]])
+        if np.linalg.norm(skew) > 1e-5:
+            return unit(skew)
+    M = Q + np.eye(3)
+    norms = np.linalg.norm(M, axis=0)
+    return unit(M[:, int(np.argmax(norms))])
 
 
-def get_axes(ops):
-    # find the rotation axes, its the eigenvector with eigenvalue 1
-    # if C4 and C2 are on the same axis just keep the C4
+def extract_improper_axis(R):
+    return extract_axis(-R)
+
+
+def get_axes(matrices, pg, coords, tol):
     axes = []
-    for op in ops:
-        R = op.rotation_matrix
-        if np.linalg.det(R) < 0:
-            continue
-        a = rot_angle(R)
-        if a < 0.1:
-            continue
-        n = round(2 * np.pi / a)
-        w, v = np.linalg.eig(R)
-        u = unit(np.real(v[:, np.argmin(abs(w - 1))]))
+    improper_orders = []
+    for R in matrices:
+        det = np.linalg.det(R)
+        if det > 0:
+            a = rot_angle(R)
+            if a < 0.05:
+                continue
+            n, _ = angle_to_order(a)
+            u = extract_axis(R)
+            for ax in axes:
+                if abs(np.dot(ax["u"], u)) > 0.99:
+                    ax["n"] = max(ax["n"], n)
+                    break
+            else:
+                axes.append({"u": u, "n": n, "sn": 0, "subtype": None})
+        else:
+            tr = np.trace(R)
+            if abs(tr - 1.0) < 0.08 or abs(tr + 3.0) < 0.08:
+                continue
+            u = extract_improper_axis(R)
+            Q = R @ (np.eye(3) - 2.0 * np.outer(u, u))
+            a = rot_angle(Q)
+            if a > 0.05:
+                sn, _ = angle_to_order(a)
+                improper_orders.append((u, sn))
+
+    for u, sn in improper_orders:
         for ax in axes:
             if abs(np.dot(ax["u"], u)) > 0.99:
-                ax["n"] = max(ax["n"], n)
+                ax["sn"] = max(ax["sn"], sn)
                 break
+
+    if not axes:
+        return axes
+
+    if pg.startswith("D") and pg not in ("D*h", "D2", "D2h"):
+        nmax = max(a["n"] for a in axes)
+        top = [a for a in axes if a["n"] == nmax]
+        if len(top) > 1:
+            top_s = [a for a in top if a["sn"] > nmax]
+            main = top_s[0]["u"] if top_s else top[0]["u"]
         else:
-            axes.append({"u": u, "n": n})
+            main = top[0]["u"]
+
+        perp_c2 = [ax for ax in axes if ax["n"] == 2 and abs(np.dot(ax["u"], main)) < 0.1]
+        if nmax % 2 == 0 and len(perp_c2) == nmax and nmax >= 4:
+            on_ax = [
+                int(np.sum(np.linalg.norm(coords - np.outer(coords @ ax["u"], ax["u"]), axis=1) < tol))
+                for ax in perp_c2
+            ]
+            ref_idx = int(np.argmax(on_ax))
+            ref_u = perp_c2[ref_idx]["u"]
+            for ax in perp_c2:
+                ang = np.arccos(np.clip(abs(np.dot(ax["u"], ref_u)), 0.0, 1.0))
+                k = round(ang / (np.pi / nmax))
+                ax["subtype"] = "C2'" if k % 2 == 0 else "C2''"
+        elif nmax % 2 == 1 and len(perp_c2) == nmax:
+            for ax in perp_c2:
+                ax["subtype"] = "C2'"
+
     return axes
 
 
-def get_planes(ops):
-    # mirror planes = ops with det -1 and trace 1 (only one direction gets flipped)
-    # the plane normal is the eigenvector with eigenvalue -1, the flipped direction
+def get_planes(matrices):
     normals = []
-    for op in ops:
-        R = op.rotation_matrix
-        if np.linalg.det(R) > 0 or abs(np.trace(R) - 1) > 0.1:
+    for R in matrices:
+        if np.linalg.det(R) > 0 or abs(np.trace(R) - 1.0) > 0.08:
             continue
-        w, v = np.linalg.eig(R)
-        n = unit(np.real(v[:, np.argmin(abs(w + 1))]))
+        n = extract_improper_axis(R)
         if all(abs(np.dot(n, m)) < 0.99 for m in normals):
             normals.append(n)
     return normals
 
 
 def label_planes(normals, pg, axes, coords, tol):
-    # decide if each plane is σh, σv or σd
-    # σh = perpendicular to the main axis, σv = contains the main axis,
-    # σd = contains the main axis but sits in between the C2 axes
     if not normals:
         return []
     if pg == "Cs":
@@ -169,7 +214,6 @@ def label_planes(normals, pg, axes, coords, tol):
     if pg == "Td":
         return ["σd"] * len(normals)
     if pg in ("Oh", "Th"):
-        # cube groups, planes facing a C4 (Oh) or C2 (Th) are σh, rest are σd
         cube = [a["u"] for a in axes if a["n"] == (4 if pg == "Oh" else 2)]
         return ["σh" if any(abs(np.dot(n, u)) > 0.99 for u in cube) else "σd" for n in normals]
 
@@ -177,38 +221,98 @@ def label_planes(normals, pg, axes, coords, tol):
     top = [a for a in axes if a["n"] == nmax]
     is_dnd = pg[0] == "D" and pg.endswith("d")
     if len(top) > 1 and not is_dnd:
-        # like D2h, no single main axis so just call them σ
         return ["σ"] * len(normals)
     if is_dnd:
-        # D2d: the main C2 is the one sitting on the S4, the others are perpendicular to the planes anyway
         return ["σd"] * len(normals)
     main = top[0]["u"]
 
     labels = ["σh" if abs(np.dot(n, main)) > 0.99 else "σv" for n in normals]
 
-    # C4v, D4h, D6h etc (even n) have 2 sets of vertical planes
-    # the set going through more atoms is σv, the other set is σd
-    # C2v is the same idea but textbook calls them σv and σv'
     vert = [i for i, l in enumerate(labels) if l == "σv"]
     if nmax % 2 == 0 and len(vert) > 1:
-        on_plane = [np.sum(abs(coords @ normals[i]) < tol) for i in vert]
-        ref = normals[vert[int(np.argmax(on_plane))]]
+        c2p = [a["u"] for a in axes if a.get("subtype") == "C2'"]
+        on_plane = [int(np.sum(abs(coords @ normals[i]) < tol)) for i in vert]
+        if max(on_plane) > min(on_plane):
+            ref = normals[vert[int(np.argmax(on_plane))]]
+        elif c2p:
+            perp_scores = [max(abs(np.dot(normals[i], u)) for u in c2p) for i in vert]
+            ref = normals[vert[int(np.argmin(perp_scores))]]
+        else:
+            ref = normals[vert[0]]
+
         other = "σv'" if nmax == 2 else "σd"
         for i in vert:
-            ang = np.arccos(np.clip(abs(np.dot(normals[i], ref)), 0, 1))
+            ang = np.arccos(np.clip(abs(np.dot(normals[i], ref)), 0.0, 1.0))
             k = round(ang / (np.pi / nmax))
             labels[i] = "σv" if k % 2 == 0 else other
     return labels
 
 
+def count_ops(matrices, axes, planes):
+    c = Counter()
+    for R in matrices:
+        det = np.linalg.det(R)
+        tr = np.trace(R)
+        if det > 0:
+            a = rot_angle(R)
+            if a < 0.05:
+                c["E"] += 1
+            else:
+                n, _ = angle_to_order(a)
+                u = extract_axis(R)
+                label = f"C{n}"
+                if n == 2 and axes:
+                    j = int(np.argmax([abs(np.dot(ax["u"], u)) for ax in axes]))
+                    if axes[j].get("subtype"):
+                        label = axes[j]["subtype"]
+                c[label] += 1
+        else:
+            if abs(tr - 1.0) < 0.08:
+                if planes:
+                    n_vec = extract_improper_axis(R)
+                    k = int(np.argmax([abs(np.dot(p["n"], n_vec)) for p in planes]))
+                    c[planes[k]["type"]] += 1
+                else:
+                    c["σ"] += 1
+            elif abs(tr + 3.0) < 0.08:
+                c["i"] += 1
+            else:
+                u = extract_improper_axis(R)
+                Q = R @ (np.eye(3) - 2.0 * np.outer(u, u))
+                a = rot_angle(Q)
+                n, _ = angle_to_order(a)
+                c[f"S{n}"] += 1
+    return c
+
+
+def ops_string(c):
+    def key(k):
+        if k == "E":
+            return (0, 0, 0)
+        if k[0] == "C":
+            m = re.match(r"^C(\d+)('*)$", k)
+            n = int(m.group(1))
+            primes = len(m.group(2))
+            return (1, -n, primes)
+        if k == "i":
+            return (2, 0, 0)
+        if k[0] == "S":
+            return (3, -int(k[1:]), 0)
+        return (4, PLANE_ORDER.index(k) if k in PLANE_ORDER else 99, 0)
+
+    out = []
+    for k in sorted(c, key=key):
+        n = c[k] if c[k] > 1 else ""
+        out.append(f"{n}{sub(k) if k[0] in 'CSσ' else k}")
+    return ", ".join(out)
+
+
 def linear_stuff(pg, coords):
-    # linear molecules have infinite planes so pymatgen doesnt list them
-    # just draw the C∞ axis, 2 of the σv as an example, and σh if its D∞h
     main = unit(np.linalg.svd(coords - coords.mean(0))[2][0])
     a = np.array([1.0, 0, 0]) if abs(main[0]) < 0.9 else np.array([0, 1.0, 0])
     p1 = unit(a - np.dot(a, main) * main)
     p2 = np.cross(main, p1)
-    axes = [{"u": main, "n": 0}]
+    axes = [{"u": main, "n": 0, "sn": 0, "subtype": None}]
     normals = [p1, p2]
     types = ["σv", "σv"]
     if pg == "D*h":
@@ -218,91 +322,102 @@ def linear_stuff(pg, coords):
 
 
 def rodrigues(u, a):
-    # rotation matrix for angle a around axis u
     K = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
-    return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * K @ K
+    return np.eye(3) + np.sin(a) * K + (1 - np.cos(a)) * (K @ K)
 
 
-def eigvec(R, val):
-    w, v = np.linalg.eig(R)
-    return unit(np.real(v[:, np.argmin(abs(w - val))]))
-
-
-
-
-def describe_ops(ops, axes, planes):
-    # turn every symmetry op into something the animation can play
-    # C = rotate, s = reflect, i = invert, S = rotate then reflect
+def describe_ops(matrices, axes, planes):
     out = []
-    for op in ops:
-        R = op.rotation_matrix
+    for R in matrices:
         det, tr = np.linalg.det(R), np.trace(R)
 
-        if det < 0 and abs(tr - 1) < 0.1:
+        if det < 0 and abs(tr - 1.0) < 0.08:
             if not planes:
                 continue
-            # mirror plane, find which one of our planes it is
-            n = eigvec(R, -1)
+            n = extract_improper_axis(R)
             k = int(np.argmax([abs(np.dot(p["n"], n)) for p in planes]))
             p = planes[k]
-            out.append({"kind": "s", "n": p["n"].tolist(), "name": p["name"], "group": "Reflections",
-                        "color": PLANE_COLORS[p["type"]], "sort": (3, k, 0),
-                        "desc": f"Reflect every atom through the {p['name']} plane"})
-            continue
-        if det < 0 and abs(tr + 3) < 0.1:
-            out.append({"kind": "i", "name": "i", "group": "Inversion", "color": "#111827", "sort": (1, 0, 0),
-                        "desc": "Send every atom straight through the center to the opposite side"})
+            out.append({
+                "kind": "s", "n": p["n"].tolist(), "name": p["name"], "tag": p["name"], "group": "Reflections",
+                "color": PLANE_COLORS[p["type"]], "sort": (3, k, 0, 0, 0),
+                "R": np.round(R, 4).tolist(),
+                "eig": f"Vectors in the {p['name']} plane stay fixed (λ = +1); normal vector n̂ flips backward (λ = -1)",
+                "desc": f"Reflect all of 3D space across the {p['name']} plane"
+            })
             continue
 
-        # rotation or improper rotation, both have an axis and an angle
+        if det < 0 and abs(tr + 3.0) < 0.08:
+            out.append({
+                "kind": "i", "name": "i", "tag": "i", "group": "Inversion", "color": "#111827",
+                "sort": (1, 0, 0, 0, 0),
+                "R": np.round(R, 4).tolist(),
+                "eig": "Every vector in 3D space is an eigenvector with λ = -1 (R·v = -v, space turns inside-out)",
+                "desc": "Invert all of 3D space straight through the origin (r → -r)"
+            })
+            continue
+
         if det > 0:
-            u = eigvec(R, 1)
+            u = extract_axis(R)
             Q = R
         else:
-            u = eigvec(R, -1)
-            Q = R @ (np.eye(3) - 2 * np.outer(u, u))  # take the mirror part off, whats left is a rotation
+            u = extract_improper_axis(R)
+            Q = R @ (np.eye(3) - 2.0 * np.outer(u, u))
+
         a = rot_angle(Q)
-        if a < 0.1:
-            continue  # this is E
+        if a < 0.05:
+            continue
         if not np.allclose(rodrigues(u, a), Q, atol=0.05):
             a = -a
 
-        # line the axis up with one from the axes list so C3 and C3² point the same way
         j = int(np.argmax([abs(np.dot(ax["u"], u)) for ax in axes])) if axes else -1
         if j >= 0 and np.dot(axes[j]["u"], u) < 0:
             u, a = -u, -a
-        a = a % (2 * np.pi)
+        a = float(a % (2.0 * np.pi))
 
-        # angle as a fraction of a full turn gives the n and the power, e.g. 240° = 2/3 turn = C3²
-        f = Fraction(a / (2 * np.pi)).limit_denominator(12)
-        n, k = f.denominator, f.numerator
+        n, k = angle_to_order(a)
         letter = "C" if det > 0 else "S"
-        # names are html so the subscripts come out properly, like C<sub>3</sub><sup>2</sup>
-        # power on top of the subscript like in the textbook: C with 2 over 3
-        name = f"{letter}<sub>{n}</sub>" if k == 1 else f"{letter}<span class='ss'><sup>{k}</sup><sub>{n}</sub></span>"
-        tag = name  # short version for the label in the 3d view
 
-        # say which axis if there is more than one of the same kind
-        # like C₃² (axis 2), or C₂ (on C₄ axis 1) when it sits on a bigger axis, S always says which axis
+        primes = ""
+        if letter == "C" and n == 2 and j >= 0 and axes[j].get("subtype"):
+            primes = axes[j]["subtype"][2:]
+
+        if k == 1:
+            name = f"{letter}<sub>{n}</sub>{primes}"
+        else:
+            name = f"{letter}<span class='ss'><sup>{k}</sup><sub>{n}</sub></span>{primes}"
+        tag = name
+
         if j >= 0:
             nax = axes[j]["n"]
-            same = [i for i, ax in enumerate(axes) if ax["n"] == nax]
+            sub_ax = axes[j].get("subtype")
+            same = [
+                i for i, ax in enumerate(axes)
+                if ax["n"] == nax and ax.get("subtype") == sub_ax
+            ]
             num = f" {same.index(j) + 1}" if len(same) > 1 else ""
+            ax_label = sub(axis_name(nax, sub_ax))
             if nax != n or letter == "S":
-                name += f" (on {sub(axis_name(nax))} axis{num})"
+                name += f" (on {ax_label} axis{num})"
             elif num:
                 name += f" (axis{num})"
 
         deg = round(np.degrees(a))
         if letter == "C":
-            desc = f"Rotate {deg}° about the " + (sub(axis_name(axes[j]["n"])) if j >= 0 else "") + " axis"
-            color = AXIS_COLORS.get(n, "#374151")
+            ax_str = sub(axis_name(axes[j]["n"], axes[j].get("subtype"))) if j >= 0 else ""
+            desc = f"Rotate 3D space by {deg}° about the {ax_str} axis"
+            eig_txt = f"The {ax_str} rotation axis is the real eigenvector with λ = +1 (stays on its span while space rotates)"
+            color = AXIS_SUBTYPE_COLORS.get(axes[j].get("subtype"), AXIS_COLORS.get(n, "#374151")) if j >= 0 else AXIS_COLORS.get(n, "#374151")
         else:
-            desc = f"Rotate {deg}° about the axis, then reflect through the plane perpendicular to it"
+            desc = f"Rotate 3D space by {deg}° about the axis, then reflect through the perpendicular plane"
+            eig_txt = "The improper rotation axis has eigenvalue λ = -1 (flips direction across the perpendicular plane)"
             color = "#0f766e"
-        out.append({"kind": letter, "u": u.tolist(), "a": a, "name": name, "tag": tag, "color": color, "desc": desc,
-                    "group": "Rotations" if letter == "C" else "Improper rotations",
-                    "sort": (0 if letter == "C" else 2, -n, int(j >= 0 and axes[j]["n"] != n), j, k)})
+
+        out.append({
+            "kind": letter, "u": u.tolist(), "a": a, "name": name, "tag": tag,
+            "color": color, "desc": desc, "eig": eig_txt, "R": np.round(R, 4).tolist(),
+            "group": "Rotations" if letter == "C" else "Improper rotations",
+            "sort": (0 if letter == "C" else 2, -n, len(primes), int(j >= 0 and axes[j]["n"] != n), j + k * 0.01)
+        })
 
     out.sort(key=lambda o: o["sort"])
     for o in out:
@@ -311,7 +426,6 @@ def describe_ops(ops, axes, planes):
 
 
 def atom_labels(mol):
-    # number each element separately, C1 C2 C3 ... H1 H2 H3 ..., in the same order as the xyz file
     count, labs = Counter(), []
     for s in mol:
         el = str(s.specie)
@@ -320,15 +434,12 @@ def atom_labels(mol):
     return labs
 
 
-# define the viewer to see the molecule
 def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     xyz = mol.to(fmt="xyz")
     coords = mol.cart_coords
     size = max(np.linalg.norm(coords, axis=1).max(), 1.0)
 
-    # atom positions, element, and a rough size so the marker ball fits around it in spacefill too
     vdw = {"H": 1.1, "C": 1.7, "N": 1.55, "O": 1.52, "F": 1.47, "Cl": 1.75, "S": 1.8, "P": 1.8, "Br": 1.85}
-    # atom colors 3Dmol uses (rasmol), so the label text can be dark on light atoms and white on dark ones
     colors = {"H": "ffffff", "B": "00ff00", "C": "c8c8c8", "N": "8f8fff", "O": "f00000", "F": "daa520",
               "Na": "0000ff", "Mg": "228b22", "Si": "daa520", "P": "ffa500", "S": "ffc832", "Cl": "00ff00",
               "Fe": "ffa500", "Cu": "a52a2a", "Zn": "a52a2a", "Br": "a52a2a", "I": "a020f0"}
@@ -342,21 +453,21 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
               "light": light(str(s.specie))}
              for c, s, lab in zip(coords, mol, atom_labels(mol))]
 
-    # axes, numbered per order like C₃ axis 1, C₃ axis 2 so u can pick them one by one
-    # atoms on the axis = distance from the axis line less than the tolerance
     ax_data = []
     for ax in axes:
         u = ax["u"]
-        same = [a for a in axes if a["n"] == ax["n"]]
-        name = sub(axis_name(ax["n"])) + " axis"
+        sub_ax = ax.get("subtype")
+        same = [a for a in axes if a["n"] == ax["n"] and a.get("subtype") == sub_ax]
+        short = sub(axis_name(ax["n"], sub_ax))
+        name = short + " axis"
         if len(same) > 1:
             name += f" {[id(a) for a in same].index(id(ax)) + 1}"
         dist = np.linalg.norm(coords - np.outer(coords @ u, u), axis=1)
-        ax_data.append({"u": u.tolist(), "n": ax["n"], "short": sub(axis_name(ax["n"])), "name": name,
+        col = AXIS_SUBTYPE_COLORS.get(sub_ax, AXIS_COLORS.get(ax["n"], "#374151"))
+        ax_data.append({"u": u.tolist(), "n": ax["n"], "short": short, "name": name,
                         "on": [int(i) for i in np.where(dist < tol)[0]],
-                        "color": AXIS_COLORS.get(ax["n"], "#374151")})
+                        "color": col})
 
-    # planes, atoms on the plane = distance to the plane less than the tolerance
     pl_data = []
     for p in planes:
         n = p["n"]
@@ -364,7 +475,6 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
         pl_data.append({"n": n.tolist(), "on": on, "type": p["type"], "short": sub(p["type"]), "name": p["name"],
                         "color": PLANE_COLORS[p["type"]]})
 
-    # display styles
     styles = {
         "Ball & stick": {"stick": {"radius": 0.14}, "sphere": {"scale": 0.25}},
         "Sticks": {"stick": {"radius": 0.18}},
@@ -374,10 +484,8 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
     data = {"xyz": xyz, "atoms": atoms, "axes": ax_data, "planes": pl_data, "ops": anim_ops, "hasI": bool(has_i),
             "styles": styles, "R": size * 1.12, "L": size * 1.3}
 
-    # 3Dmol does the 3d part, then make it so i can input a file into the 3Dmol
-    # the buttons are inside here too so the camera doesnt reset every time u click something
     html = """
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <style>
 * {box-sizing:border-box; font-family:Inter, system-ui, sans-serif;}
@@ -399,17 +507,19 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
 .small {font-size:12.5px; padding:4px 6px;}
 #vwrap {position:relative;}
 #v {width:100%; height:__H__px; position:relative;}
+#spaceCv {position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:4;}
 #alabs {position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:5;}
 .al {position:absolute; left:0; top:0; font-size:11px; font-weight:600; line-height:13px; white-space:nowrap;
      will-change:transform; color:#111827; text-shadow:0 0 2px rgba(255,255,255,.9), 0 0 1px rgba(255,255,255,.9);}
 .al.dk {color:#fff; text-shadow:0 0 2px rgba(0,0,0,.75), 0 0 1px rgba(0,0,0,.75);}
 .tag {position:absolute; left:0; top:0; font-size:12px; font-weight:600; color:#fff; padding:1px 7px 2px; border-radius:6px;
       white-space:nowrap; will-change:transform; z-index:2;}
+.btag {position:absolute; left:0; top:0; font-size:12.5px; font-weight:700; color:#fff; padding:1px 6px; border-radius:6px;
+       white-space:nowrap; will-change:transform; z-index:6; box-shadow:0 1px 3px rgba(0,0,0,.22);}
 sub, sup {font-size:.72em; line-height:0;}
 .ss {display:inline-flex; flex-direction:column; vertical-align:middle; font-size:.7em; line-height:1; margin-left:1px;}
 .ss sup, .ss sub {font-size:1em; line-height:1; vertical-align:baseline;}
 
-/* dropdown made by hand, the normal one cant show subscripts */
 .dd {position:relative; display:inline-block;}
 .dd-btn {display:inline-flex; align-items:center; justify-content:space-between; gap:12px; min-width:200px; font-size:13px;
          padding:6px 10px; border:1px solid #e5e7eb; border-radius:9px; background:#fff; color:#111827; cursor:pointer; text-align:left;}
@@ -441,6 +551,30 @@ sub, sup {font-size:.72em; line-height:0;}
 .anim input[type=range] {flex:1; min-width:140px; accent-color:#111827;}
 .cap {font-size:13px; color:#374151; margin-top:9px; min-height:18px;}
 .cap .ok {color:#15803d; font-weight:500;}
+
+/* 3Blue1Brown Matrix & Linear Transformation HUD */
+.mat-panel {margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #e5e7eb; border-radius:11px;
+            display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; justify-content:space-between;}
+.mat-left {display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap;}
+.mat-title {font-size:11.5px; font-weight:700; color:#4b5563; margin-bottom:4px; text-transform:uppercase; letter-spacing:.03em;}
+.mat-wrap {display:inline-flex; align-items:center; font-variant-numeric:tabular-nums;}
+.mat-b {width:7px; align-self:stretch; border:2px solid #111827;}
+.mat-b.l {border-right:0; border-radius:3px 0 0 3px;}
+.mat-b.r {border-left:0; border-radius:0 3px 3px 0;}
+.mat-grid {display:grid; grid-template-columns:repeat(3, 58px); gap:3px 8px; padding:4px 8px; text-align:right; font-size:13px; font-weight:600;}
+.mat-hdr {display:grid; grid-template-columns:repeat(3, 58px); gap:0 8px; padding:0 15px 3px; text-align:right; font-size:11.5px; font-weight:700;}
+.ci {color:#16a34a;}
+.cj {color:#dc2626;}
+.ck {color:#2563eb;}
+.cv {color:#d97706;}
+.mat-info {flex:1; min-width:270px; font-size:12.5px; color:#4b5563; line-height:1.5;}
+.mat-badges {display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; align-items:center;}
+.mbadge {display:inline-flex; align-items:center; gap:5px; padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; background:#f3f4f6; color:#111827;}
+.mbadge.pos {background:#dcfce7; color:#166534;}
+.mbadge.neg {background:#fee2e2; color:#991b1b;}
+.mbadge.zero {background:#fef3c7; color:#92400e;}
+.vec-eq {margin-top:6px; padding:6px 10px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:8px;
+         font-size:12px; font-variant-numeric:tabular-nums; color:#111827;}
 </style>
 
 <div class="wrap">
@@ -453,13 +587,22 @@ sub, sup {font-size:.72em; line-height:0;}
         <option value="el">C, H</option>
         <option value="num">C1, C2 … H1, H2</option>
       </select>
+      <label class="lbl" for="vecAt">Track atom (3b1b)</label>
+      <select id="vecAt" class="small">
+        <option value="-1">Off</option>
+      </select>
+      <button class="chip" id="tSpace"><span class="d" style="background:#0ea5e9"></span>Space grid (3b1b)</button>
       <button class="chip" id="tLab">Element labels</button>
       <button class="chip" id="tFill">Plane fill</button>
       <button class="chip" id="tMark"><span class="d" style="background:#f59e0b"></span>Mark atoms on element</button>
       <button class="chip" id="tReset">Reset view</button>
     </div>
   </div>
-  <div id="vwrap"><div id="v"></div><div id="alabs"></div></div>
+  <div id="vwrap">
+    <div id="v"></div>
+    <canvas id="spaceCv"></canvas>
+    <div id="alabs"></div>
+  </div>
   <div class="row" id="elRow">
     <span class="lbl">Show</span>
     <div class="dd" id="elSel"></div>
@@ -477,20 +620,48 @@ sub, sup {font-size:.72em; line-height:0;}
       <button class="chip" id="tGhost">Start positions</button>
     </div>
     <div class="cap" id="cap"></div>
+    <div class="mat-panel" id="matPanel">
+      <div class="mat-left">
+        <div>
+          <div class="mat-title" id="matTitle">Transformation Matrix R(t)</div>
+          <div class="mat-hdr">
+            <span class="ci">î (col 1)</span>
+            <span class="cj">ĵ (col 2)</span>
+            <span class="ck">k̂ (col 3)</span>
+          </div>
+          <div class="mat-wrap">
+            <div class="mat-b l"></div>
+            <div class="mat-grid" id="matGrid"></div>
+            <div class="mat-b r"></div>
+          </div>
+        </div>
+      </div>
+      <div class="mat-info" id="matInfo"></div>
+    </div>
   </div>
 </div>
 
 <script>
 const D = __DATA__;
-const S = {style: Object.keys(D.styles)[0], labels: true, fill: true, mark: true, atomLab: "off",
-           el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
+const S = {style: Object.keys(D.styles)[0], space: true, labels: true, fill: true, mark: true, atomLab: "off",
+           vecAt: D.atoms.length ? 0 : -1, el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
 const v = $3Dmol.createViewer("v", {backgroundColor: "white"});
 const $ = id => document.getElementById(id);
 const model = v.addModel(D.xyz, "xyz");
 const atoms = model.selectedAtoms({});
 const P0 = D.atoms.map(a => a.p);
-// second copy of the molecule that never moves, drawn faint grey = the start positions
 const ghost = v.addModel(D.xyz, "xyz");
+
+// Populate "Track atom (3b1b)" selector
+const vecSel = $("vecAt");
+D.atoms.forEach((a, i) => {
+  const opt = document.createElement("option");
+  opt.value = String(i);
+  opt.textContent = `${a.lab} (${a.p[0].toFixed(2)}, ${a.p[1].toFixed(2)}, ${a.p[2].toFixed(2)})`;
+  vecSel.appendChild(opt);
+});
+vecSel.value = String(S.vecAt);
+
 function ghostStyle() {
   const g = {color: "#9ca3af", opacity: 0.3};
   if (S.style === "Spacefill") return {sphere: {...g, scale: 0.92}};
@@ -498,14 +669,11 @@ function ghostStyle() {
   return {sphere: {...g, scale: 0.3}};
 }
 
-// every symmetry element in one list: axes, then planes, then the inversion center
 const ELS = [];
-// axes sorted biggest order first (C∞ counts as the biggest)
 [...D.axes].sort((a, b) => (b.n || 99) - (a.n || 99)).forEach(a => ELS.push({kind: "axis", name: a.name, color: a.color, u: a.u, short: a.short, on: a.on}));
 D.planes.forEach(p => ELS.push({kind: "plane", name: p.name, color: p.color, n: p.n, short: p.short, on: p.on}));
 if (D.hasI) ELS.push({kind: "i", name: "Inversion center", color: "#111827", on: P0.map((p, i) => i).filter(i => Math.hypot(...P0[i]) < 0.3)});
 
-// small vector math
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const add = (a, b, s = 1) => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]];
@@ -517,26 +685,61 @@ function basis(n) {
   const e1 = norm(add(a, n, -dot(a, n)));
   return {n: n, e1: e1, e2: cross(n, e1)};
 }
-// rotate p around axis u by angle a (rodrigues)
 function rotate(p, u, a) {
   const c = Math.cos(a), s = Math.sin(a);
   return add(add(mul(p, c), cross(u, p), s), u, dot(u, p) * (1 - c));
 }
-// move p towards its mirror image, s = 0 start, s = 1 fully reflected
 function reflect(p, n, s) { return add(p, n, -2 * s * dot(p, n)); }
 const ease = x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 
-// where an atom is at time t of the operation
 function pos(p, op, t) {
+  if (!op) return p;
   if (op.kind === "C") return rotate(p, op.u, op.a * ease(t));
   if (op.kind === "s") return reflect(p, op.n, ease(t));
   if (op.kind === "i") return mul(p, 1 - 2 * ease(t));
-  // S = rotate first half, reflect through the perpendicular plane second half
   if (t < 0.5) return rotate(p, op.u, op.a * ease(2 * t));
   return reflect(rotate(p, op.u, op.a), op.u, ease(2 * t - 1));
 }
 
-// disc (or a ring if r0 > 0) for a plane, both faces so u can see it from any angle
+// Compute current transformed basis vectors î(t), ĵ(t), k̂(t) — the 3 columns of R(t)
+function currentBasis() {
+  const op = S.op >= 0 ? D.ops[S.op] : null;
+  const ih = pos([1, 0, 0], op, S.t);
+  const jh = pos([0, 1, 0], op, S.t);
+  const kh = pos([0, 0, 1], op, S.t);
+  return [ih, jh, kh];
+}
+
+// Determinant of matrix with columns [ih, jh, kh] = ih · (jh × kh)
+function det3(ih, jh, kh) {
+  return dot(ih, cross(jh, kh));
+}
+
+// Prebuild 3Blue1Brown 3D volumetric lattice segments in normalized [-1, 1]^3 coordinates
+// Plus the 6 faces and 12 edges of the unit cube [0, 1]^3 spanned by î, ĵ, k̂
+const GRID_SEGS = [];
+const CUBE_CORNERS = [
+  [0,0,0], [1,0,0], [0,1,0], [0,0,1],
+  [1,1,0], [1,0,1], [0,1,1], [1,1,1]
+];
+const CUBE_EDGES = [
+  [0,1],[0,2],[0,3], [1,4],[1,5], [2,4],[2,6], [3,5],[3,6], [4,7],[5,7],[6,7]
+];
+const CUBE_FACES = [
+  [0,1,4,2], [3,5,7,6], [0,1,5,3], [2,4,7,6], [0,2,6,3], [1,4,7,5]
+];
+(function buildGridGeometry() {
+  // Full 3Blue1Brown Chapter 5 3D volumetric lattice at {-1, 0, 1}
+  const coords = [-1, 0, 1];
+  for (const a of coords) {
+    for (const b of coords) {
+      GRID_SEGS.push([[-1, a, b], [1, a, b]]);
+      GRID_SEGS.push([[a, -1, b], [a, 1, b]]);
+      GRID_SEGS.push([[a, b, -1], [a, b, 1]]);
+    }
+  }
+})();
+
 function disc(b, r0, r1, color, alpha) {
   const N = 72, V = [], Nm = [], F = [];
   for (const s of [1, -1]) {
@@ -555,14 +758,12 @@ function disc(b, r0, r1, color, alpha) {
   }
   v.addCustom({vertexArr: V, normalArr: Nm, faceArr: F, color: color, alpha: alpha});
 }
-// strong = only this plane is on screen, so it gets a darker fill and grid lines
-// the grid lines make it easy to tell where the plane is from any angle, even face on
 function plane(n, color, text, strong) {
   const b = basis(n);
   if (S.fill) {
     disc(b, 0, D.R, color, strong ? 0.2 : 0.08);
     if (strong) {
-      const k = 8;  // grid lines every 1/8 of the radius
+      const k = 8;
       for (let i = -k + 1; i < k; i++) {
         const d = D.R * i / k, h = Math.sqrt(D.R * D.R - d * d);
         for (const [e, f] of [[b.e1, b.e2], [b.e2, b.e1]]) {
@@ -584,7 +785,6 @@ function center(color) {
   v.addSphere({center: {x: 0, y: 0, z: 0}, radius: 0.18, color: color});
   if (S.labels) label("i", {x: 0, y: 0, z: 0}, color);
 }
-// element labels are html too (like the atom labels) so C<sub>3</sub> and σ<sub>h</sub> get real subscripts
 let tags = [];
 function label(html, pos, color) { tags.push({html: html, pos: pos, color: color}); }
 function atomR(a) { return S.style === "Spacefill" ? a.r * 0.9 : S.style === "Sticks" ? 0.18 : a.r * 0.25; }
@@ -593,7 +793,6 @@ function drawEl(e) {
   if (e.kind === "plane") plane(e.n, e.color, e.short, typeof S.el === "number");
   if (e.kind === "i") center(e.color);
 }
-// see-through ball around the atoms that sit on an element, first element wins if an atom is on more than one
 function markAtoms(list) {
   const done = new Set();
   list.forEach(e => e.on.forEach(j => {
@@ -603,8 +802,6 @@ function markAtoms(list) {
   }));
 }
 
-// draw() redoes everything, only used when something changes (new element, new operation, a toggle)
-// during the animation only frame() runs, which just moves the atoms, way cheaper
 function draw() {
   const op = S.op >= 0 ? D.ops[S.op] : null;
   v.removeAllShapes();
@@ -613,30 +810,26 @@ function draw() {
   ghost.setStyle({}, op && S.ghost ? ghostStyle() : {});
 
   if (op) {
-    // animation mode, only show the element that belongs to this operation
     if (op.kind === "C") axisLine(op.u, op.color, op.tag);
     if (op.kind === "S") { axisLine(op.u, op.color, op.tag); plane(op.u, "#64748b", "", true); }
     if (op.kind === "s") plane(op.n, op.color, op.name, true);
     if (op.kind === "i") center(op.color);
   } else {
-    // which elements to show: everything, only axes, only planes, or just one
     let list;
     if (S.el === "all") list = ELS;
     else if (S.el === "axes") list = ELS.filter(e => e.kind === "axis");
     else if (S.el === "planes") list = ELS.filter(e => e.kind === "plane");
     else list = [ELS[S.el]];
     list.forEach(drawEl);
-    // in the all views only mark atoms on planes, otherwise the whole molecule lights up
     if (S.mark) markAtoms(typeof S.el === "number" ? list : list.filter(e => e.kind === "plane"));
   }
   moveAtoms();
-  model.setStyle({}, D.styles[S.style]);  // full rebuild of the molecule
+  model.setStyle({}, D.styles[S.style]);
   buildLabels();
   v.render();
   ui();
 }
 
-// put every atom where it should be at time t
 function moveAtoms() {
   const op = S.op >= 0 ? D.ops[S.op] : null;
   atoms.forEach((a, i) => {
@@ -645,8 +838,6 @@ function moveAtoms() {
   });
 }
 
-// one animation frame: move atoms, then either update the existing 3d shapes in place
-// (newer 3Dmol has syncAtomPositions for this) or rebuild just the molecule
 function frame() {
   moveAtoms();
   if (!(model.syncAtomPositions && model.syncAtomPositions())) model.setStyle({}, D.styles[S.style]);
@@ -654,14 +845,17 @@ function frame() {
   uiAnim();
 }
 
-// atom labels are normal html on top of the 3d view, moving them is basically free
-// compared to making 120 new 3Dmol labels every frame (that was what made it laggy)
+// 3Blue1Brown Space Grid, Shaded Determinant Cube, Basis Vectors & Tracked Atom Vector
 const lbox = $("alabs");
-let lspans = [], tspans = [];
+const spaceCv = $("spaceCv");
+const ctx = spaceCv.getContext("2d");
+let lspans = [], tspans = [], bspans = [];
+
 function buildLabels() {
   lbox.innerHTML = "";
   lspans = [];
   tspans = [];
+  bspans = [];
   if (S.atomLab !== "off") D.atoms.forEach(a => {
     const s = document.createElement("span");
     s.className = a.light ? "al" : "al dk";
@@ -677,15 +871,204 @@ function buildLabels() {
     lbox.appendChild(s);
     tspans.push(s);
   });
+  if (S.space) {
+    [["î", "#16a34a"], ["ĵ", "#dc2626"], ["k̂", "#2563eb"]].forEach(([txt, col]) => {
+      const s = document.createElement("span");
+      s.className = "btag";
+      s.style.background = col;
+      s.textContent = txt;
+      lbox.appendChild(s);
+      bspans.push(s);
+    });
+  }
   placeLabels();
 }
+
+function drawArrow2D(x0, y0, x1, y1, color, width, dashed = false) {
+  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
+  if (len < 2) return;
+  const ux = dx / len, uy = dy / len;
+  const headLen = Math.min(11, len * 0.35), headW = headLen * 0.58;
+  ctx.save();
+  if (dashed) ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(x0, y0);
+  ctx.lineTo(x1 - ux * headLen * 0.7, y1 - uy * headLen * 0.7);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 - ux * headLen - uy * headW, y1 - uy * headLen + ux * headW);
+  ctx.lineTo(x1 - ux * headLen + uy * headW, y1 - uy * headLen - ux * headW);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function renderSpaceGrid(left, top, width, height) {
+  const dpr = window.devicePixelRatio || 1;
+  if (spaceCv.width !== Math.round(width * dpr) || spaceCv.height !== Math.round(height * dpr)) {
+    spaceCv.width = Math.round(width * dpr);
+    spaceCv.height = Math.round(height * dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (!S.space && S.vecAt < 0) return [];
+
+  const scale = D.R * 0.78;
+  const [ih, jh, kh] = currentBasis();
+  const E1 = [1, 0, 0], E2 = [0, 1, 0], E3 = [0, 0, 1];
+  const linComb = (c, b1, b2, b3, sc = scale) => ({
+    x: sc * (c[0] * b1[0] + c[1] * b2[0] + c[2] * b3[0]),
+    y: sc * (c[0] * b1[1] + c[1] * b2[1] + c[2] * b3[1]),
+    z: sc * (c[0] * b1[2] + c[1] * b2[2] + c[2] * b3[2])
+  });
+
+  const pts3D = [];
+  // 0: Origin
+  pts3D.push({x: 0, y: 0, z: 0});
+  // 1..3: Stationary reference basis tips
+  pts3D.push(linComb(E1, E1, E2, E3), linComb(E2, E1, E2, E3), linComb(E3, E1, E2, E3));
+  // 4..6: Transformed basis tips î(t), ĵ(t), k̂(t)
+  pts3D.push(linComb(E1, ih, jh, kh), linComb(E2, ih, jh, kh), linComb(E3, ih, jh, kh));
+  // 7..9: Basis label positions
+  pts3D.push(linComb([1.14, 0, 0], ih, jh, kh), linComb([0, 1.14, 0], ih, jh, kh), linComb([0, 0, 1.14], ih, jh, kh));
+
+  // Stationary background grid points
+  const bgGridStart = pts3D.length;
+  GRID_SEGS.forEach(([a, b]) => {
+    pts3D.push(linComb(a, E1, E2, E3), linComb(b, E1, E2, E3));
+  });
+
+  // Active transforming 3D lattice points
+  const fgGridStart = pts3D.length;
+  GRID_SEGS.forEach(([a, b]) => {
+    pts3D.push(linComb(a, ih, jh, kh), linComb(b, ih, jh, kh));
+  });
+
+  // 8 corners of the unit cube spanned by î(t), ĵ(t), k̂(t)
+  const cubeCornerStart = pts3D.length;
+  CUBE_CORNERS.forEach(c => pts3D.push(linComb(c, ih, jh, kh)));
+
+  // Optional tracked atom linear combination steps: x*î(t) -> +y*ĵ(t) -> +z*k̂(t)
+  const trackStart = pts3D.length;
+  if (S.vecAt >= 0 && S.vecAt < P0.length) {
+    const [x, y, z] = P0[S.vecAt];
+    pts3D.push(
+      linComb([x, 0, 0], ih, jh, kh, 1.0),
+      linComb([x, y, 0], ih, jh, kh, 1.0),
+      linComb([x, y, z], ih, jh, kh, 1.0)
+    );
+  }
+
+  const sc = v.modelToScreen(pts3D).map(p => ({x: p.x - left, y: p.y - top}));
+  const O = sc[0];
+
+  if (S.space) {
+    // 1) Faint stationary background grid (3Blue1Brown original coordinate reference)
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
+    ctx.beginPath();
+    for (let i = 0; i < GRID_SEGS.length; i++) {
+      const p1 = sc[bgGridStart + 2 * i], p2 = sc[bgGridStart + 2 * i + 1];
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+
+    // Stationary dashed reference basis axes
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
+    for (let i = 1; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(O.x, O.y);
+      ctx.lineTo(sc[i].x, sc[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // 2) Active transforming 3Blue1Brown 3D coordinate lattice
+    ctx.lineWidth = 1.05;
+    ctx.strokeStyle = "rgba(14, 165, 233, 0.24)";
+    ctx.beginPath();
+    for (let i = 0; i < GRID_SEGS.length; i++) {
+      const p1 = sc[fgGridStart + 2 * i], p2 = sc[fgGridStart + 2 * i + 1];
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+    }
+    ctx.stroke();
+
+    // 3) Shaded 3Blue1Brown Unit Cube / Parallelepiped (shows Determinant Volume & Orientation!)
+    const d = det3(ih, jh, kh);
+    const faceFill = Math.abs(d) < 0.08
+      ? "rgba(245, 158, 11, 0.16)"
+      : (d > 0 ? "rgba(16, 185, 129, 0.10)" : "rgba(239, 68, 68, 0.12)");
+    const edgeStroke = Math.abs(d) < 0.08
+      ? "rgba(217, 119, 6, 0.55)"
+      : (d > 0 ? "rgba(16, 185, 129, 0.48)" : "rgba(220, 38, 38, 0.52)");
+
+    ctx.fillStyle = faceFill;
+    CUBE_FACES.forEach(([a, b, c, dIdx]) => {
+      const pa = sc[cubeCornerStart + a], pb = sc[cubeCornerStart + b],
+            pc = sc[cubeCornerStart + c], pd = sc[cubeCornerStart + dIdx];
+      ctx.beginPath();
+      ctx.moveTo(pa.x, pa.y);
+      ctx.lineTo(pb.x, pb.y);
+      ctx.lineTo(pc.x, pc.y);
+      ctx.lineTo(pd.x, pd.y);
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = edgeStroke;
+    ctx.beginPath();
+    CUBE_EDGES.forEach(([a, b]) => {
+      const p1 = sc[cubeCornerStart + a], p2 = sc[cubeCornerStart + b];
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+    });
+    ctx.stroke();
+
+    // 4) Basis vectors î (green), ĵ (red), k̂ (blue)
+    drawArrow2D(O.x, O.y, sc[4].x, sc[4].y, "#16a34a", 3.1);
+    drawArrow2D(O.x, O.y, sc[5].x, sc[5].y, "#dc2626", 3.1);
+    drawArrow2D(O.x, O.y, sc[6].x, sc[6].y, "#2563eb", 3.1);
+  }
+
+  // 5) Tracked Atom Vector r(t) = x*î(t) + y*ĵ(t) + z*k̂(t) (3Blue1Brown Chapter 3/5 linear combination)
+  if (S.vecAt >= 0 && S.vecAt < P0.length) {
+    const pX = sc[trackStart], pXY = sc[trackStart + 1], pXYZ = sc[trackStart + 2];
+    drawArrow2D(O.x, O.y, pX.x, pX.y, "rgba(22, 163, 74, 0.78)", 2.0, true);
+    drawArrow2D(pX.x, pX.y, pXY.x, pXY.y, "rgba(220, 38, 38, 0.78)", 2.0, true);
+    drawArrow2D(pXY.x, pXY.y, pXYZ.x, pXYZ.y, "rgba(37, 99, 235, 0.78)", 2.0, true);
+    drawArrow2D(O.x, O.y, pXYZ.x, pXYZ.y, "#d97706", 3.2, false);
+  }
+
+  return S.space ? [sc[7], sc[8], sc[9]] : [];
+}
+
 function placeLabels() {
-  if (!lspans.length && !tspans.length) return;
   const cv = $("v").querySelector("canvas");
   if (!cv) return;
   const r = cv.getBoundingClientRect();
   const left = r.left + window.pageXOffset - document.documentElement.clientLeft;
   const top = r.top + window.pageYOffset - document.documentElement.clientTop;
+
+  const basisTipScreens = renderSpaceGrid(left, top, r.width, r.height);
+  if (bspans.length === 3 && basisTipScreens.length === 3) {
+    basisTipScreens.forEach((p, i) => {
+      bspans[i].style.transform = "translate(" + p.x + "px," + p.y + "px) translate(-50%,-50%)";
+    });
+  }
+
+  if (!lspans.length && !tspans.length) return;
   const pts = (lspans.length ? atoms.map(a => ({x: a.x, y: a.y, z: a.z})) : []).concat(tags.map(t => t.pos));
   const sc = v.modelToScreen(pts);
   const spans = lspans.concat(tspans);
@@ -693,10 +1076,8 @@ function placeLabels() {
     spans[i].style.transform = "translate(" + (p.x - left) + "px," + (p.y - top) + "px) translate(-50%,-50%)";
   });
 }
-// 3Dmol calls this after every render, so labels follow when u rotate/zoom too
 v.setViewChangeCallback(placeLabels);
 
-// toolbar
 const seg = $("seg");
 Object.keys(D.styles).forEach(k => {
   const b = document.createElement("button");
@@ -705,12 +1086,13 @@ Object.keys(D.styles).forEach(k => {
   seg.appendChild(b);
 });
 $("atLab").onchange = () => { S.atomLab = $("atLab").value; draw(); };
+$("vecAt").onchange = () => { S.vecAt = +$("vecAt").value; draw(); };
+$("tSpace").onclick = () => { S.space = !S.space; draw(); };
 $("tLab").onclick = () => { S.labels = !S.labels; draw(); };
 $("tFill").onclick = () => { S.fill = !S.fill; draw(); };
 $("tMark").onclick = () => { S.mark = !S.mark; draw(); };
 $("tReset").onclick = () => { v.zoomTo(); v.render(); };
 
-// dropdown that can show html (subscripts), groups = [{title, items: [{value, html}]}]
 function makeDD(root, groups, onPick) {
   root.innerHTML = '<button type="button" class="dd-btn" aria-haspopup="listbox"><span class="dd-val"></span>' +
                    '<span class="dd-caret">▾</span></button><div class="dd-menu" role="listbox"></div>';
@@ -735,7 +1117,6 @@ function makeDD(root, groups, onPick) {
     const opening = !root.classList.contains("open");
     closeDDs();
     if (!opening) return;
-    // open upwards if there is no room below (the viewer is above, so there always is room there)
     const r = btn.getBoundingClientRect();
     root.classList.toggle("up", window.innerHeight - r.bottom < 300);
     root.classList.add("open");
@@ -752,7 +1133,6 @@ function closeDDs() { document.querySelectorAll(".dd.open").forEach(d => d.class
 document.addEventListener("click", closeDDs);
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDDs(); });
 
-// element picker, the list plus ◀ ▶ to go through them one at a time
 const elGroups = [];
 if (ELS.length === 0) {
   elGroups.push({title: null, items: [{value: "all", html: "No symmetry elements"}]});
@@ -779,7 +1159,6 @@ function stepEl(d) {
 $("prev").onclick = () => stepEl(-1);
 $("next").onclick = () => stepEl(1);
 
-// animation controls, the list is grouped like rotations / inversion / reflections
 const playBtn = $("play"), scrub = $("scrub"), cap = $("cap");
 const opGroups = [{title: null, items: [{value: -1, html: D.ops.length ? "Pick an operation" : "Only E, nothing to animate"}]}];
 D.ops.forEach((o, i) => {
@@ -804,7 +1183,6 @@ scrub.oninput = () => { if (S.op < 0) return; S.playing = false; S.t = scrub.val
 $("tLoop").onclick = () => { S.loop = !S.loop; ui(); };
 $("tGhost").onclick = () => { S.ghost = !S.ghost; draw(); };
 
-// the actual animation loop, holds a bit at the end so u can see it matches, then goes again
 let last = null, hold = 0;
 function start() { last = null; hold = 0; requestAnimationFrame(tick); }
 function tick(ts) {
@@ -829,13 +1207,13 @@ function tick(ts) {
 
 function ui() {
   [...seg.children].forEach(b => b.classList.toggle("on", b.textContent === S.style));
+  $("tSpace").classList.toggle("off", !S.space);
   $("tLab").classList.toggle("off", !S.labels);
   $("tFill").classList.toggle("off", !S.fill);
   $("tMark").classList.toggle("off", !S.mark);
   $("tLoop").classList.toggle("off", !S.loop);
   $("tGhost").classList.toggle("off", !S.ghost);
 
-  // element row
   $("elRow").classList.toggle("dim", S.op >= 0);
   elDD.set(S.el);
   const info = $("elInfo");
@@ -847,62 +1225,105 @@ function ui() {
       (S.el + 1) + " of " + ELS.length + ", " + n + (n === 1 ? " atom " : " atoms ") + where;
   } else info.textContent = ELS.length ? ELS.length + " elements, use ◀ ▶ to see them one at a time" : "";
 
-  // animation row
   playBtn.disabled = S.op < 0;
   playBtn.textContent = S.playing ? "Pause" : "Play";
   opDD.set(S.op);
   uiAnim();
 }
 
-// the bits that change every frame: slider and caption
-let lastCap = "";
+const fmtNum = x => (Math.abs(x) < 0.005 ? "0.00" : (x >= 0 ? "+" : "") + x.toFixed(2));
+let lastCap = "", lastMatHtml = "";
+
 function uiAnim() {
   scrub.value = Math.round(S.t * 1000);
   let txt = "";
   if (S.op < 0) {
-    txt = D.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
+    txt = D.ops.length ? "Pick a symmetry operation to watch the matrix transform 3D space and the molecule." : "";
   } else {
     const o = D.ops[S.op];
     txt = o.desc + ".";
-    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating</b>" : " <b>Step 2: reflecting</b>";
-    if (S.t >= 1) txt += ' <span class="ok">Looks the same as before, so it is a symmetry operation.</span>';
+    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating space</b>" : " <b>Step 2: reflecting space</b>";
+    if (S.t >= 1) txt += ' <span class="ok">Every atom lands on an identical atom, so R is a symmetry operation.</span>';
   }
   if (txt !== lastCap) { cap.innerHTML = txt; lastCap = txt; }
+
+  // Update 3Blue1Brown live 3x3 Matrix [î(t) | ĵ(t) | k̂(t)]
+  const [ih, jh, kh] = currentBasis();
+  const d = det3(ih, jh, kh);
+  const tr = ih[0] + jh[1] + kh[2];
+  let cells = "";
+  for (let r = 0; r < 3; r++) {
+    cells += `<span class="ci">${fmtNum(ih[r])}</span>` +
+             `<span class="cj">${fmtNum(jh[r])}</span>` +
+             `<span class="ck">${fmtNum(kh[r])}</span>`;
+  }
+  if (cells !== lastMatHtml) {
+    $("matGrid").innerHTML = cells;
+    lastMatHtml = cells;
+  }
+
+  const detClass = Math.abs(d) < 0.08 ? "zero" : (d > 0 ? "pos" : "neg");
+  const orientTxt = Math.abs(d) < 0.08
+    ? "Cube squished flat through lower dimension (det = 0)"
+    : (d > 0 ? "Right-handed cube orientation preserved (det = +1)" : "Space inverted inside-out: left-handed (det = -1)");
+
+  const eigInfo = S.op >= 0
+    ? `<div style="margin-top:3px"><b>Eigenvector (Ch. 10):</b> ${D.ops[S.op].eig}.</div>`
+    : `<div style="margin-top:3px"><b>Basis Columns (Ch. 3 & 5):</b> The 3 columns of R(t) are the live landing coordinates of <b class="ci">î</b>, <b class="cj">ĵ</b>, <b class="ck">k̂</b>.</div>`;
+
+  let vecHtml = "";
+  if (S.vecAt >= 0 && S.vecAt < D.atoms.length) {
+    const a = D.atoms[S.vecAt];
+    const [x, y, z] = a.p;
+    const rx = x * ih[0] + y * jh[0] + z * kh[0];
+    const ry = x * ih[1] + y * jh[1] + z * kh[1];
+    const rz = x * ih[2] + y * jh[2] + z * kh[2];
+    vecHtml = `<div class="vec-eq"><b class="cv">${a.lab}(t)</b> = ` +
+              `(${x.toFixed(2)})<b class="ci">î(t)</b> + (${y.toFixed(2)})<b class="cj">ĵ(t)</b> + (${z.toFixed(2)})<b class="ck">k̂(t)</b> = ` +
+              `<b>[${rx.toFixed(2)}, ${ry.toFixed(2)}, ${rz.toFixed(2)}]</b></div>`;
+  }
+
+  $("matTitle").innerHTML = S.op >= 0
+    ? `Live Matrix R(t) — ${D.ops[S.op].tag}`
+    : "Identity Matrix E (at rest)";
+  $("matInfo").innerHTML =
+    `<div class="mat-badges">` +
+      `<span class="mbadge ${detClass}">det R(t) = ${d >= 0 ? "+" : ""}${d.toFixed(2)}</span>` +
+      `<span class="mbadge">Tr R(t) = ${tr >= 0 ? "+" : ""}${tr.toFixed(2)}</span>` +
+      `<span class="mbadge">${orientTxt}</span>` +
+    `</div>` +
+    eigInfo + vecHtml;
 }
 v.zoomTo();
 draw();
 </script>
 """
     html = html.replace("__H__", str(height)).replace("__DATA__", json.dumps(data))
-    components.html(html, height=height + 250)
+    components.html(html, height=height + 400)
 
 
 # title
 st.markdown("""
 <div class="ui top">
   <p class="title">Point group finder</p>
-  <p class="subtitle">Upload an .xyz file to get its point group, rotation axes and mirror planes.</p>
+  <p class="subtitle">Upload an .xyz file to get its point group, rotation axes, mirror planes, and 3Blue1Brown space transformations.</p>
 </div>
 """, unsafe_allow_html=True)
 
-# file on the left, tolerance on the right
 c1, c2 = st.columns([3, 1.3], gap="large")
 with c1:
     up = st.file_uploader("XYZ file", type=["xyz"], label_visibility="collapsed")
 with c2:
-    # tolerance
     tol = st.slider("Tolerance (Å)", 0.05, 1.0, 0.3, 0.05,
                     help="How far atoms can be off and still count as symmetric. "
                          "Raise it if a symmetric molecule comes out as C1.")
 
-# no file no point group
 if up is None:
     st.markdown("""
 <div class="ui empty"><b>No molecule yet</b><br>Drop an .xyz file above to get started.</div>
 """, unsafe_allow_html=True)
     st.stop()
 
-# read the xyz, if it errors the file is probably cooked
 try:
     mol = Molecule.from_str(up.getvalue().decode("utf-8", errors="ignore"), fmt="xyz")
 except Exception as e:
@@ -910,23 +1331,20 @@ except Exception as e:
              f"(atom count, comment line, then element x y z). Error: {e}")
     st.stop()
 
-# the actual pymatgen part, the rest is just ui tbh
 with st.spinner("Finding symmetry..."):
-    pga = PointGroupAnalyzer(mol, tolerance=tol)
+    pga = PointGroupAnalyzer(mol, tolerance=tol, eig_tolerance=max(0.01, tol * 0.08))
     pg = pga.sch_symbol
-    ops = pga.get_symmetry_operations()
-    cmol = pga.centered_mol  # centered at center of mass, the ops are based on this
+    raw_ops = pga.get_symmetry_operations()
+    matrices = clean_ops(raw_ops)
+    cmol = pga.centered_mol
 
-# count the ops, find the axes and the planes
-counts = count_ops(ops)
 if "*" in pg:
     axes, normals, types = linear_stuff(pg, cmol.cart_coords)
 else:
-    axes = get_axes(ops)
-    normals = get_planes(ops)
+    axes = get_axes(matrices, pg, cmol.cart_coords, tol)
+    normals = get_planes(matrices)
     types = label_planes(normals, pg, axes, cmol.cart_coords, tol)
 
-# sort planes σh first then σv σd, and name them σv 1, σv 2 etc so u can tell them apart
 order = sorted(range(len(types)), key=lambda i: PLANE_ORDER.index(types[i]))
 planes, seen = [], Counter()
 for i in order:
@@ -935,20 +1353,15 @@ for i in order:
     name = sub(t) + (f" {seen[t]}" if types.count(t) > 1 else "")
     planes.append({"n": normals[i], "type": t, "name": name})
 
-# swap the plain σ count for σh / σv / σd (not for linear, infinite planes there)
-if "*" not in pg:
-    counts.pop("σ", None)
-    counts.update(types)
+counts = count_ops(matrices, axes, planes)
 
-# molecule on the left, results on the right
 left, right = st.columns([3, 1.3], gap="large")
 
 with left:
-    viewer(cmol, axes, planes, tol, describe_ops(ops, axes, planes), counts.get("i"))
+    viewer(cmol, axes, planes, tol, describe_ops(matrices, axes, planes), counts.get("i"))
 
 with right:
-    # the main thing, the point group
-    order_txt = "∞ (linear, only a few planes drawn)" if "*" in pg else str(len(ops))
+    order_txt = "∞ (linear, only a few planes drawn)" if "*" in pg else str(len(matrices))
     ops_txt = ops_string(counts)
     if pg == "C*v":
         ops_txt = "E, 2C<sub>∞</sub>, ∞σ<sub>v</sub>"
@@ -963,7 +1376,6 @@ with right:
 </div>
 """, unsafe_allow_html=True)
 
-    # extra info
     formula = re.sub(r"(\d+)", r"<sub>\1</sub>", mol.composition.formula.replace(" ", ""))
     st.markdown(f"""
 <div class="ui stats">
@@ -974,12 +1386,16 @@ with right:
 </div>
 """, unsafe_allow_html=True)
 
-    # list of the symmetry elements and how many of each
     rows = ""
-    for n in sorted({a["n"] for a in axes}, key=lambda n: -99 if n == 0 else -n):
-        k = "1" if n == 0 else str(sum(a["n"] == n for a in axes))
-        rows += (f'<div class="row"><span><span class="dot" style="background:{AXIS_COLORS.get(n, "#374151")}"></span>'
-                 f'{sub(axis_name(n))} axis</span><span class="cnt">{k}</span></div>')
+    axis_groups = sorted(
+        {(a["n"], a.get("subtype")) for a in axes},
+        key=lambda x: (-99 if x[0] == 0 else -x[0], len(x[1] or ""))
+    )
+    for n, sub_ax in axis_groups:
+        k = "1" if n == 0 else str(sum(a["n"] == n and a.get("subtype") == sub_ax for a in axes))
+        col = AXIS_SUBTYPE_COLORS.get(sub_ax, AXIS_COLORS.get(n, "#374151"))
+        rows += (f'<div class="row"><span><span class="dot" style="background:{col}"></span>'
+                 f'{sub(axis_name(n, sub_ax))} axis</span><span class="cnt">{k}</span></div>')
     for t in PLANE_ORDER:
         k = types.count(t)
         if k:
@@ -994,7 +1410,6 @@ with right:
     st.markdown(f'<div class="ui card"><p class="cap" style="margin-bottom:6px">Symmetry elements</p>{rows}</div>',
                 unsafe_allow_html=True)
 
-    # coordinates in a dropdown so it doesnt take the whole page
     with st.expander("Coordinates (centered)"):
         st.dataframe(
             {"atom": atom_labels(cmol),
@@ -1003,13 +1418,12 @@ with right:
              "z": cmol.cart_coords[:, 2].round(4)},
             height=300, hide_index=True)
 
-    # download the result as txt
     plane_txt = ", ".join(f"{types.count(t)} {t}" for t in PLANE_ORDER if types.count(t)) or "none"
     if "*" in pg:
         plane_txt = "infinite (linear)"
     st.download_button("Download result",
                        f"file: {up.name}\nformula: {mol.composition.formula}\n"
                        f"atoms: {len(mol)}\ntolerance: {tol} A\n"
-                       f"point group: {pg}\nsym ops: {len(ops)}\n"
+                       f"point group: {pg}\nsym ops: {len(matrices)}\n"
                        f"mirror planes: {plane_txt}\n",
                        file_name=up.name.rsplit(".", 1)[0] + "_pointgroup.txt")
