@@ -186,7 +186,7 @@ def get_axes(matrices, pg, coords, tol):
                 ang = np.arccos(np.clip(abs(np.dot(ax["u"], ref_u)), 0.0, 1.0))
                 k = round(ang / (np.pi / nmax))
                 ax["subtype"] = "C2'" if k % 2 == 0 else "C2''"
-        elif nmax % 2 == 1 and len(perp_c2) == nmax:
+        elif len(perp_c2) == nmax:
             for ax in perp_c2:
                 ax["subtype"] = "C2'"
 
@@ -652,7 +652,6 @@ const atoms = model.selectedAtoms({});
 const P0 = D.atoms.map(a => a.p);
 const ghost = v.addModel(D.xyz, "xyz");
 
-// Populate "Track atom (3b1b)" selector
 const vecSel = $("vecAt");
 D.atoms.forEach((a, i) => {
   const opt = document.createElement("option");
@@ -701,7 +700,6 @@ function pos(p, op, t) {
   return reflect(rotate(p, op.u, op.a), op.u, ease(2 * t - 1));
 }
 
-// Compute current transformed basis vectors î(t), ĵ(t), k̂(t) — the 3 columns of R(t)
 function currentBasis() {
   const op = S.op >= 0 ? D.ops[S.op] : null;
   const ih = pos([1, 0, 0], op, S.t);
@@ -710,13 +708,10 @@ function currentBasis() {
   return [ih, jh, kh];
 }
 
-// Determinant of matrix with columns [ih, jh, kh] = ih · (jh × kh)
 function det3(ih, jh, kh) {
   return dot(ih, cross(jh, kh));
 }
 
-// Prebuild 3Blue1Brown 3D volumetric lattice segments in normalized [-1, 1]^3 coordinates
-// Plus the 6 faces and 12 edges of the unit cube [0, 1]^3 spanned by î, ĵ, k̂
 const GRID_SEGS = [];
 const CUBE_CORNERS = [
   [0,0,0], [1,0,0], [0,1,0], [0,0,1],
@@ -729,7 +724,6 @@ const CUBE_FACES = [
   [0,1,4,2], [3,5,7,6], [0,1,5,3], [2,4,7,6], [0,2,6,3], [1,4,7,5]
 ];
 (function buildGridGeometry() {
-  // Full 3Blue1Brown Chapter 5 3D volumetric lattice at {-1, 0, 1}
   const coords = [-1, 0, 1];
   for (const a of coords) {
     for (const b of coords) {
@@ -845,7 +839,6 @@ function frame() {
   uiAnim();
 }
 
-// 3Blue1Brown Space Grid, Shaded Determinant Cube, Basis Vectors & Tracked Atom Vector
 const lbox = $("alabs");
 const spaceCv = $("spaceCv");
 const ctx = spaceCv.getContext("2d");
@@ -929,32 +922,24 @@ function renderSpaceGrid(left, top, width, height) {
   });
 
   const pts3D = [];
-  // 0: Origin
   pts3D.push({x: 0, y: 0, z: 0});
-  // 1..3: Stationary reference basis tips
   pts3D.push(linComb(E1, E1, E2, E3), linComb(E2, E1, E2, E3), linComb(E3, E1, E2, E3));
-  // 4..6: Transformed basis tips î(t), ĵ(t), k̂(t)
   pts3D.push(linComb(E1, ih, jh, kh), linComb(E2, ih, jh, kh), linComb(E3, ih, jh, kh));
-  // 7..9: Basis label positions
   pts3D.push(linComb([1.14, 0, 0], ih, jh, kh), linComb([0, 1.14, 0], ih, jh, kh), linComb([0, 0, 1.14], ih, jh, kh));
 
-  // Stationary background grid points
   const bgGridStart = pts3D.length;
   GRID_SEGS.forEach(([a, b]) => {
     pts3D.push(linComb(a, E1, E2, E3), linComb(b, E1, E2, E3));
   });
 
-  // Active transforming 3D lattice points
   const fgGridStart = pts3D.length;
   GRID_SEGS.forEach(([a, b]) => {
     pts3D.push(linComb(a, ih, jh, kh), linComb(b, ih, jh, kh));
   });
 
-  // 8 corners of the unit cube spanned by î(t), ĵ(t), k̂(t)
   const cubeCornerStart = pts3D.length;
   CUBE_CORNERS.forEach(c => pts3D.push(linComb(c, ih, jh, kh)));
 
-  // Optional tracked atom linear combination steps: x*î(t) -> +y*ĵ(t) -> +z*k̂(t)
   const trackStart = pts3D.length;
   if (S.vecAt >= 0 && S.vecAt < P0.length) {
     const [x, y, z] = P0[S.vecAt];
@@ -969,7 +954,6 @@ function renderSpaceGrid(left, top, width, height) {
   const O = sc[0];
 
   if (S.space) {
-    // 1) Faint stationary background grid (3Blue1Brown original coordinate reference)
     ctx.lineWidth = 0.8;
     ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
     ctx.beginPath();
@@ -980,7 +964,6 @@ function renderSpaceGrid(left, top, width, height) {
     }
     ctx.stroke();
 
-    // Stationary dashed reference basis axes
     ctx.save();
     ctx.setLineDash([4, 4]);
     ctx.lineWidth = 1.2;
@@ -993,7 +976,6 @@ function renderSpaceGrid(left, top, width, height) {
     }
     ctx.restore();
 
-    // 2) Active transforming 3Blue1Brown 3D coordinate lattice
     ctx.lineWidth = 1.05;
     ctx.strokeStyle = "rgba(14, 165, 233, 0.24)";
     ctx.beginPath();
@@ -1004,7 +986,6 @@ function renderSpaceGrid(left, top, width, height) {
     }
     ctx.stroke();
 
-    // 3) Shaded 3Blue1Brown Unit Cube / Parallelepiped (shows Determinant Volume & Orientation!)
     const d = det3(ih, jh, kh);
     const faceFill = Math.abs(d) < 0.08
       ? "rgba(245, 158, 11, 0.16)"
@@ -1036,13 +1017,11 @@ function renderSpaceGrid(left, top, width, height) {
     });
     ctx.stroke();
 
-    // 4) Basis vectors î (green), ĵ (red), k̂ (blue)
     drawArrow2D(O.x, O.y, sc[4].x, sc[4].y, "#16a34a", 3.1);
     drawArrow2D(O.x, O.y, sc[5].x, sc[5].y, "#dc2626", 3.1);
     drawArrow2D(O.x, O.y, sc[6].x, sc[6].y, "#2563eb", 3.1);
   }
 
-  // 5) Tracked Atom Vector r(t) = x*î(t) + y*ĵ(t) + z*k̂(t) (3Blue1Brown Chapter 3/5 linear combination)
   if (S.vecAt >= 0 && S.vecAt < P0.length) {
     const pX = sc[trackStart], pXY = sc[trackStart + 1], pXYZ = sc[trackStart + 2];
     drawArrow2D(O.x, O.y, pX.x, pX.y, "rgba(22, 163, 74, 0.78)", 2.0, true);
@@ -1247,7 +1226,6 @@ function uiAnim() {
   }
   if (txt !== lastCap) { cap.innerHTML = txt; lastCap = txt; }
 
-  // Update 3Blue1Brown live 3x3 Matrix [î(t) | ĵ(t) | k̂(t)]
   const [ih, jh, kh] = currentBasis();
   const d = det3(ih, jh, kh);
   const tr = ih[0] + jh[1] + kh[2];
@@ -1332,7 +1310,10 @@ except Exception as e:
     st.stop()
 
 with st.spinner("Finding symmetry..."):
-    pga = PointGroupAnalyzer(mol, tolerance=tol, eig_tolerance=max(0.01, tol * 0.08))
+    try:
+        pga = PointGroupAnalyzer(mol, tolerance=tol, eigen_tolerance=max(0.01, tol * 0.08))
+    except TypeError:
+        pga = PointGroupAnalyzer(mol, tolerance=tol)
     pg = pga.sch_symbol
     raw_ops = pga.get_symmetry_operations()
     matrices = clean_ops(raw_ops)
