@@ -338,21 +338,17 @@ def describe_ops(matrices, axes, planes):
             k = int(np.argmax([abs(np.dot(p["n"], n)) for p in planes]))
             p = planes[k]
             out.append({
-                "kind": "s", "n": p["n"].tolist(), "name": p["name"], "tag": p["name"], "group": "Reflections",
+                "kind": "s", "n": p["n"].tolist(), "name": p["name"], "group": "Reflections",
                 "color": PLANE_COLORS[p["type"]], "sort": (3, k, 0, 0, 0),
-                "R": np.round(R, 4).tolist(),
-                "eig": f"Vectors in the {p['name']} plane stay fixed (λ = +1); normal vector n̂ flips backward (λ = -1)",
-                "desc": f"Reflect all of 3D space across the {p['name']} plane"
+                "desc": f"Reflect every atom through the {p['name']} plane"
             })
             continue
 
         if det < 0 and abs(tr + 3.0) < 0.08:
             out.append({
-                "kind": "i", "name": "i", "tag": "i", "group": "Inversion", "color": "#111827",
+                "kind": "i", "name": "i", "group": "Inversion", "color": "#111827",
                 "sort": (1, 0, 0, 0, 0),
-                "R": np.round(R, 4).tolist(),
-                "eig": "Every vector in 3D space is an eigenvector with λ = -1 (R·v = -v, space turns inside-out)",
-                "desc": "Invert all of 3D space straight through the origin (r → -r)"
+                "desc": "Send every atom straight through the center to the opposite side"
             })
             continue
 
@@ -404,17 +400,15 @@ def describe_ops(matrices, axes, planes):
         deg = round(np.degrees(a))
         if letter == "C":
             ax_str = sub(axis_name(axes[j]["n"], axes[j].get("subtype"))) if j >= 0 else ""
-            desc = f"Rotate 3D space by {deg}° about the {ax_str} axis"
-            eig_txt = f"The {ax_str} rotation axis is the real eigenvector with λ = +1 (stays on its span while space rotates)"
+            desc = f"Rotate {deg}° about the {ax_str} axis"
             color = AXIS_SUBTYPE_COLORS.get(axes[j].get("subtype"), AXIS_COLORS.get(n, "#374151")) if j >= 0 else AXIS_COLORS.get(n, "#374151")
         else:
-            desc = f"Rotate 3D space by {deg}° about the axis, then reflect through the perpendicular plane"
-            eig_txt = "The improper rotation axis has eigenvalue λ = -1 (flips direction across the perpendicular plane)"
+            desc = f"Rotate {deg}° about the axis, then reflect through the plane perpendicular to it"
             color = "#0f766e"
 
         out.append({
             "kind": letter, "u": u.tolist(), "a": a, "name": name, "tag": tag,
-            "color": color, "desc": desc, "eig": eig_txt, "R": np.round(R, 4).tolist(),
+            "color": color, "desc": desc,
             "group": "Rotations" if letter == "C" else "Improper rotations",
             "sort": (0 if letter == "C" else 2, -n, len(primes), int(j >= 0 and axes[j]["n"] != n), j + k * 0.01)
         })
@@ -485,7 +479,7 @@ def viewer(mol, axes, planes, tol, anim_ops, has_i, height=540):
             "styles": styles, "R": size * 1.12, "L": size * 1.3}
 
     html = """
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <style>
 * {box-sizing:border-box; font-family:Inter, system-ui, sans-serif;}
@@ -507,15 +501,12 @@ select {font-size:13px; padding:6px 8px; border:1px solid #e5e7eb; border-radius
 .small {font-size:12.5px; padding:4px 6px;}
 #vwrap {position:relative;}
 #v {width:100%; height:__H__px; position:relative;}
-#spaceCv {position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:4;}
 #alabs {position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:5;}
 .al {position:absolute; left:0; top:0; font-size:11px; font-weight:600; line-height:13px; white-space:nowrap;
      will-change:transform; color:#111827; text-shadow:0 0 2px rgba(255,255,255,.9), 0 0 1px rgba(255,255,255,.9);}
 .al.dk {color:#fff; text-shadow:0 0 2px rgba(0,0,0,.75), 0 0 1px rgba(0,0,0,.75);}
 .tag {position:absolute; left:0; top:0; font-size:12px; font-weight:600; color:#fff; padding:1px 7px 2px; border-radius:6px;
       white-space:nowrap; will-change:transform; z-index:2;}
-.btag {position:absolute; left:0; top:0; font-size:12.5px; font-weight:700; color:#fff; padding:1px 6px; border-radius:6px;
-       white-space:nowrap; will-change:transform; z-index:6; box-shadow:0 1px 3px rgba(0,0,0,.22);}
 sub, sup {font-size:.72em; line-height:0;}
 .ss {display:inline-flex; flex-direction:column; vertical-align:middle; font-size:.7em; line-height:1; margin-left:1px;}
 .ss sup, .ss sub {font-size:1em; line-height:1; vertical-align:baseline;}
@@ -551,30 +542,6 @@ sub, sup {font-size:.72em; line-height:0;}
 .anim input[type=range] {flex:1; min-width:140px; accent-color:#111827;}
 .cap {font-size:13px; color:#374151; margin-top:9px; min-height:18px;}
 .cap .ok {color:#15803d; font-weight:500;}
-
-/* 3Blue1Brown Matrix & Linear Transformation HUD */
-.mat-panel {margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #e5e7eb; border-radius:11px;
-            display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; justify-content:space-between;}
-.mat-left {display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap;}
-.mat-title {font-size:11.5px; font-weight:700; color:#4b5563; margin-bottom:4px; text-transform:uppercase; letter-spacing:.03em;}
-.mat-wrap {display:inline-flex; align-items:center; font-variant-numeric:tabular-nums;}
-.mat-b {width:7px; align-self:stretch; border:2px solid #111827;}
-.mat-b.l {border-right:0; border-radius:3px 0 0 3px;}
-.mat-b.r {border-left:0; border-radius:0 3px 3px 0;}
-.mat-grid {display:grid; grid-template-columns:repeat(3, 58px); gap:3px 8px; padding:4px 8px; text-align:right; font-size:13px; font-weight:600;}
-.mat-hdr {display:grid; grid-template-columns:repeat(3, 58px); gap:0 8px; padding:0 15px 3px; text-align:right; font-size:11.5px; font-weight:700;}
-.ci {color:#16a34a;}
-.cj {color:#dc2626;}
-.ck {color:#2563eb;}
-.cv {color:#d97706;}
-.mat-info {flex:1; min-width:270px; font-size:12.5px; color:#4b5563; line-height:1.5;}
-.mat-badges {display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; align-items:center;}
-.mbadge {display:inline-flex; align-items:center; gap:5px; padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; background:#f3f4f6; color:#111827;}
-.mbadge.pos {background:#dcfce7; color:#166534;}
-.mbadge.neg {background:#fee2e2; color:#991b1b;}
-.mbadge.zero {background:#fef3c7; color:#92400e;}
-.vec-eq {margin-top:6px; padding:6px 10px; background:#f8fafc; border:1px solid #e5e7eb; border-radius:8px;
-         font-size:12px; font-variant-numeric:tabular-nums; color:#111827;}
 </style>
 
 <div class="wrap">
@@ -587,22 +554,13 @@ sub, sup {font-size:.72em; line-height:0;}
         <option value="el">C, H</option>
         <option value="num">C1, C2 … H1, H2</option>
       </select>
-      <label class="lbl" for="vecAt">Track atom (3b1b)</label>
-      <select id="vecAt" class="small">
-        <option value="-1">Off</option>
-      </select>
-      <button class="chip" id="tSpace"><span class="d" style="background:#0ea5e9"></span>Space grid (3b1b)</button>
       <button class="chip" id="tLab">Element labels</button>
       <button class="chip" id="tFill">Plane fill</button>
       <button class="chip" id="tMark"><span class="d" style="background:#f59e0b"></span>Mark atoms on element</button>
       <button class="chip" id="tReset">Reset view</button>
     </div>
   </div>
-  <div id="vwrap">
-    <div id="v"></div>
-    <canvas id="spaceCv"></canvas>
-    <div id="alabs"></div>
-  </div>
+  <div id="vwrap"><div id="v"></div><div id="alabs"></div></div>
   <div class="row" id="elRow">
     <span class="lbl">Show</span>
     <div class="dd" id="elSel"></div>
@@ -620,47 +578,19 @@ sub, sup {font-size:.72em; line-height:0;}
       <button class="chip" id="tGhost">Start positions</button>
     </div>
     <div class="cap" id="cap"></div>
-    <div class="mat-panel" id="matPanel">
-      <div class="mat-left">
-        <div>
-          <div class="mat-title" id="matTitle">Transformation Matrix R(t)</div>
-          <div class="mat-hdr">
-            <span class="ci">î (col 1)</span>
-            <span class="cj">ĵ (col 2)</span>
-            <span class="ck">k̂ (col 3)</span>
-          </div>
-          <div class="mat-wrap">
-            <div class="mat-b l"></div>
-            <div class="mat-grid" id="matGrid"></div>
-            <div class="mat-b r"></div>
-          </div>
-        </div>
-      </div>
-      <div class="mat-info" id="matInfo"></div>
-    </div>
   </div>
 </div>
 
 <script>
 const D = __DATA__;
-const S = {style: Object.keys(D.styles)[0], space: true, labels: true, fill: true, mark: true, atomLab: "off",
-           vecAt: D.atoms.length ? 0 : -1, el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
+const S = {style: Object.keys(D.styles)[0], labels: true, fill: true, mark: true, atomLab: "off",
+           el: "all", op: -1, t: 0, playing: false, loop: true, ghost: true};
 const v = $3Dmol.createViewer("v", {backgroundColor: "white"});
 const $ = id => document.getElementById(id);
 const model = v.addModel(D.xyz, "xyz");
 const atoms = model.selectedAtoms({});
 const P0 = D.atoms.map(a => a.p);
 const ghost = v.addModel(D.xyz, "xyz");
-
-const vecSel = $("vecAt");
-D.atoms.forEach((a, i) => {
-  const opt = document.createElement("option");
-  opt.value = String(i);
-  opt.textContent = `${a.lab} (${a.p[0].toFixed(2)}, ${a.p[1].toFixed(2)}, ${a.p[2].toFixed(2)})`;
-  vecSel.appendChild(opt);
-});
-vecSel.value = String(S.vecAt);
-
 function ghostStyle() {
   const g = {color: "#9ca3af", opacity: 0.3};
   if (S.style === "Spacefill") return {sphere: {...g, scale: 0.92}};
@@ -692,47 +622,12 @@ function reflect(p, n, s) { return add(p, n, -2 * s * dot(p, n)); }
 const ease = x => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 
 function pos(p, op, t) {
-  if (!op) return p;
   if (op.kind === "C") return rotate(p, op.u, op.a * ease(t));
   if (op.kind === "s") return reflect(p, op.n, ease(t));
   if (op.kind === "i") return mul(p, 1 - 2 * ease(t));
   if (t < 0.5) return rotate(p, op.u, op.a * ease(2 * t));
   return reflect(rotate(p, op.u, op.a), op.u, ease(2 * t - 1));
 }
-
-function currentBasis() {
-  const op = S.op >= 0 ? D.ops[S.op] : null;
-  const ih = pos([1, 0, 0], op, S.t);
-  const jh = pos([0, 1, 0], op, S.t);
-  const kh = pos([0, 0, 1], op, S.t);
-  return [ih, jh, kh];
-}
-
-function det3(ih, jh, kh) {
-  return dot(ih, cross(jh, kh));
-}
-
-const GRID_SEGS = [];
-const CUBE_CORNERS = [
-  [0,0,0], [1,0,0], [0,1,0], [0,0,1],
-  [1,1,0], [1,0,1], [0,1,1], [1,1,1]
-];
-const CUBE_EDGES = [
-  [0,1],[0,2],[0,3], [1,4],[1,5], [2,4],[2,6], [3,5],[3,6], [4,7],[5,7],[6,7]
-];
-const CUBE_FACES = [
-  [0,1,4,2], [3,5,7,6], [0,1,5,3], [2,4,7,6], [0,2,6,3], [1,4,7,5]
-];
-(function buildGridGeometry() {
-  const coords = [-1, 0, 1];
-  for (const a of coords) {
-    for (const b of coords) {
-      GRID_SEGS.push([[-1, a, b], [1, a, b]]);
-      GRID_SEGS.push([[a, -1, b], [a, 1, b]]);
-      GRID_SEGS.push([[a, b, -1], [a, b, 1]]);
-    }
-  }
-})();
 
 function disc(b, r0, r1, color, alpha) {
   const N = 72, V = [], Nm = [], F = [];
@@ -840,15 +735,11 @@ function frame() {
 }
 
 const lbox = $("alabs");
-const spaceCv = $("spaceCv");
-const ctx = spaceCv.getContext("2d");
-let lspans = [], tspans = [], bspans = [];
-
+let lspans = [], tspans = [];
 function buildLabels() {
   lbox.innerHTML = "";
   lspans = [];
   tspans = [];
-  bspans = [];
   if (S.atomLab !== "off") D.atoms.forEach(a => {
     const s = document.createElement("span");
     s.className = a.light ? "al" : "al dk";
@@ -864,190 +755,15 @@ function buildLabels() {
     lbox.appendChild(s);
     tspans.push(s);
   });
-  if (S.space) {
-    [["î", "#16a34a"], ["ĵ", "#dc2626"], ["k̂", "#2563eb"]].forEach(([txt, col]) => {
-      const s = document.createElement("span");
-      s.className = "btag";
-      s.style.background = col;
-      s.textContent = txt;
-      lbox.appendChild(s);
-      bspans.push(s);
-    });
-  }
   placeLabels();
 }
-
-function drawArrow2D(x0, y0, x1, y1, color, width, dashed = false) {
-  const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy);
-  if (len < 2) return;
-  const ux = dx / len, uy = dy / len;
-  const headLen = Math.min(11, len * 0.35), headW = headLen * 0.58;
-  ctx.save();
-  if (dashed) ctx.setLineDash([4, 3]);
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = width;
-  ctx.lineCap = "round";
-  ctx.beginPath();
-  ctx.moveTo(x0, y0);
-  ctx.lineTo(x1 - ux * headLen * 0.7, y1 - uy * headLen * 0.7);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x1 - ux * headLen - uy * headW, y1 - uy * headLen + ux * headW);
-  ctx.lineTo(x1 - ux * headLen + uy * headW, y1 - uy * headLen - ux * headW);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function renderSpaceGrid(left, top, width, height) {
-  const dpr = window.devicePixelRatio || 1;
-  if (spaceCv.width !== Math.round(width * dpr) || spaceCv.height !== Math.round(height * dpr)) {
-    spaceCv.width = Math.round(width * dpr);
-    spaceCv.height = Math.round(height * dpr);
-  }
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-  if (!S.space && S.vecAt < 0) return [];
-
-  const scale = D.R * 0.78;
-  const [ih, jh, kh] = currentBasis();
-  const E1 = [1, 0, 0], E2 = [0, 1, 0], E3 = [0, 0, 1];
-  const linComb = (c, b1, b2, b3, sc = scale) => ({
-    x: sc * (c[0] * b1[0] + c[1] * b2[0] + c[2] * b3[0]),
-    y: sc * (c[0] * b1[1] + c[1] * b2[1] + c[2] * b3[1]),
-    z: sc * (c[0] * b1[2] + c[1] * b2[2] + c[2] * b3[2])
-  });
-
-  const pts3D = [];
-  pts3D.push({x: 0, y: 0, z: 0});
-  pts3D.push(linComb(E1, E1, E2, E3), linComb(E2, E1, E2, E3), linComb(E3, E1, E2, E3));
-  pts3D.push(linComb(E1, ih, jh, kh), linComb(E2, ih, jh, kh), linComb(E3, ih, jh, kh));
-  pts3D.push(linComb([1.14, 0, 0], ih, jh, kh), linComb([0, 1.14, 0], ih, jh, kh), linComb([0, 0, 1.14], ih, jh, kh));
-
-  const bgGridStart = pts3D.length;
-  GRID_SEGS.forEach(([a, b]) => {
-    pts3D.push(linComb(a, E1, E2, E3), linComb(b, E1, E2, E3));
-  });
-
-  const fgGridStart = pts3D.length;
-  GRID_SEGS.forEach(([a, b]) => {
-    pts3D.push(linComb(a, ih, jh, kh), linComb(b, ih, jh, kh));
-  });
-
-  const cubeCornerStart = pts3D.length;
-  CUBE_CORNERS.forEach(c => pts3D.push(linComb(c, ih, jh, kh)));
-
-  const trackStart = pts3D.length;
-  if (S.vecAt >= 0 && S.vecAt < P0.length) {
-    const [x, y, z] = P0[S.vecAt];
-    pts3D.push(
-      linComb([x, 0, 0], ih, jh, kh, 1.0),
-      linComb([x, y, 0], ih, jh, kh, 1.0),
-      linComb([x, y, z], ih, jh, kh, 1.0)
-    );
-  }
-
-  const sc = v.modelToScreen(pts3D).map(p => ({x: p.x - left, y: p.y - top}));
-  const O = sc[0];
-
-  if (S.space) {
-    ctx.lineWidth = 0.8;
-    ctx.strokeStyle = "rgba(148, 163, 184, 0.16)";
-    ctx.beginPath();
-    for (let i = 0; i < GRID_SEGS.length; i++) {
-      const p1 = sc[bgGridStart + 2 * i], p2 = sc[bgGridStart + 2 * i + 1];
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-    }
-    ctx.stroke();
-
-    ctx.save();
-    ctx.setLineDash([4, 4]);
-    ctx.lineWidth = 1.2;
-    ctx.strokeStyle = "rgba(148, 163, 184, 0.45)";
-    for (let i = 1; i <= 3; i++) {
-      ctx.beginPath();
-      ctx.moveTo(O.x, O.y);
-      ctx.lineTo(sc[i].x, sc[i].y);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    ctx.lineWidth = 1.05;
-    ctx.strokeStyle = "rgba(14, 165, 233, 0.24)";
-    ctx.beginPath();
-    for (let i = 0; i < GRID_SEGS.length; i++) {
-      const p1 = sc[fgGridStart + 2 * i], p2 = sc[fgGridStart + 2 * i + 1];
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-    }
-    ctx.stroke();
-
-    const d = det3(ih, jh, kh);
-    const faceFill = Math.abs(d) < 0.08
-      ? "rgba(245, 158, 11, 0.16)"
-      : (d > 0 ? "rgba(16, 185, 129, 0.10)" : "rgba(239, 68, 68, 0.12)");
-    const edgeStroke = Math.abs(d) < 0.08
-      ? "rgba(217, 119, 6, 0.55)"
-      : (d > 0 ? "rgba(16, 185, 129, 0.48)" : "rgba(220, 38, 38, 0.52)");
-
-    ctx.fillStyle = faceFill;
-    CUBE_FACES.forEach(([a, b, c, dIdx]) => {
-      const pa = sc[cubeCornerStart + a], pb = sc[cubeCornerStart + b],
-            pc = sc[cubeCornerStart + c], pd = sc[cubeCornerStart + dIdx];
-      ctx.beginPath();
-      ctx.moveTo(pa.x, pa.y);
-      ctx.lineTo(pb.x, pb.y);
-      ctx.lineTo(pc.x, pc.y);
-      ctx.lineTo(pd.x, pd.y);
-      ctx.closePath();
-      ctx.fill();
-    });
-
-    ctx.lineWidth = 1.4;
-    ctx.strokeStyle = edgeStroke;
-    ctx.beginPath();
-    CUBE_EDGES.forEach(([a, b]) => {
-      const p1 = sc[cubeCornerStart + a], p2 = sc[cubeCornerStart + b];
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-    });
-    ctx.stroke();
-
-    drawArrow2D(O.x, O.y, sc[4].x, sc[4].y, "#16a34a", 3.1);
-    drawArrow2D(O.x, O.y, sc[5].x, sc[5].y, "#dc2626", 3.1);
-    drawArrow2D(O.x, O.y, sc[6].x, sc[6].y, "#2563eb", 3.1);
-  }
-
-  if (S.vecAt >= 0 && S.vecAt < P0.length) {
-    const pX = sc[trackStart], pXY = sc[trackStart + 1], pXYZ = sc[trackStart + 2];
-    drawArrow2D(O.x, O.y, pX.x, pX.y, "rgba(22, 163, 74, 0.78)", 2.0, true);
-    drawArrow2D(pX.x, pX.y, pXY.x, pXY.y, "rgba(220, 38, 38, 0.78)", 2.0, true);
-    drawArrow2D(pXY.x, pXY.y, pXYZ.x, pXYZ.y, "rgba(37, 99, 235, 0.78)", 2.0, true);
-    drawArrow2D(O.x, O.y, pXYZ.x, pXYZ.y, "#d97706", 3.2, false);
-  }
-
-  return S.space ? [sc[7], sc[8], sc[9]] : [];
-}
-
 function placeLabels() {
+  if (!lspans.length && !tspans.length) return;
   const cv = $("v").querySelector("canvas");
   if (!cv) return;
   const r = cv.getBoundingClientRect();
   const left = r.left + window.pageXOffset - document.documentElement.clientLeft;
   const top = r.top + window.pageYOffset - document.documentElement.clientTop;
-
-  const basisTipScreens = renderSpaceGrid(left, top, r.width, r.height);
-  if (bspans.length === 3 && basisTipScreens.length === 3) {
-    basisTipScreens.forEach((p, i) => {
-      bspans[i].style.transform = "translate(" + p.x + "px," + p.y + "px) translate(-50%,-50%)";
-    });
-  }
-
-  if (!lspans.length && !tspans.length) return;
   const pts = (lspans.length ? atoms.map(a => ({x: a.x, y: a.y, z: a.z})) : []).concat(tags.map(t => t.pos));
   const sc = v.modelToScreen(pts);
   const spans = lspans.concat(tspans);
@@ -1065,8 +781,6 @@ Object.keys(D.styles).forEach(k => {
   seg.appendChild(b);
 });
 $("atLab").onchange = () => { S.atomLab = $("atLab").value; draw(); };
-$("vecAt").onchange = () => { S.vecAt = +$("vecAt").value; draw(); };
-$("tSpace").onclick = () => { S.space = !S.space; draw(); };
 $("tLab").onclick = () => { S.labels = !S.labels; draw(); };
 $("tFill").onclick = () => { S.fill = !S.fill; draw(); };
 $("tMark").onclick = () => { S.mark = !S.mark; draw(); };
@@ -1186,7 +900,6 @@ function tick(ts) {
 
 function ui() {
   [...seg.children].forEach(b => b.classList.toggle("on", b.textContent === S.style));
-  $("tSpace").classList.toggle("off", !S.space);
   $("tLab").classList.toggle("off", !S.labels);
   $("tFill").classList.toggle("off", !S.fill);
   $("tMark").classList.toggle("off", !S.mark);
@@ -1210,81 +923,33 @@ function ui() {
   uiAnim();
 }
 
-const fmtNum = x => (Math.abs(x) < 0.005 ? "0.00" : (x >= 0 ? "+" : "") + x.toFixed(2));
-let lastCap = "", lastMatHtml = "";
-
+let lastCap = "";
 function uiAnim() {
   scrub.value = Math.round(S.t * 1000);
   let txt = "";
   if (S.op < 0) {
-    txt = D.ops.length ? "Pick a symmetry operation to watch the matrix transform 3D space and the molecule." : "";
+    txt = D.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
   } else {
     const o = D.ops[S.op];
     txt = o.desc + ".";
-    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating space</b>" : " <b>Step 2: reflecting space</b>";
-    if (S.t >= 1) txt += ' <span class="ok">Every atom lands on an identical atom, so R is a symmetry operation.</span>';
+    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating</b>" : " <b>Step 2: reflecting</b>";
+    if (S.t >= 1) txt += ' <span class="ok">Looks the same as before, so it is a symmetry operation.</span>';
   }
   if (txt !== lastCap) { cap.innerHTML = txt; lastCap = txt; }
-
-  const [ih, jh, kh] = currentBasis();
-  const d = det3(ih, jh, kh);
-  const tr = ih[0] + jh[1] + kh[2];
-  let cells = "";
-  for (let r = 0; r < 3; r++) {
-    cells += `<span class="ci">${fmtNum(ih[r])}</span>` +
-             `<span class="cj">${fmtNum(jh[r])}</span>` +
-             `<span class="ck">${fmtNum(kh[r])}</span>`;
-  }
-  if (cells !== lastMatHtml) {
-    $("matGrid").innerHTML = cells;
-    lastMatHtml = cells;
-  }
-
-  const detClass = Math.abs(d) < 0.08 ? "zero" : (d > 0 ? "pos" : "neg");
-  const orientTxt = Math.abs(d) < 0.08
-    ? "Cube squished flat through lower dimension (det = 0)"
-    : (d > 0 ? "Right-handed cube orientation preserved (det = +1)" : "Space inverted inside-out: left-handed (det = -1)");
-
-  const eigInfo = S.op >= 0
-    ? `<div style="margin-top:3px"><b>Eigenvector (Ch. 10):</b> ${D.ops[S.op].eig}.</div>`
-    : `<div style="margin-top:3px"><b>Basis Columns (Ch. 3 & 5):</b> The 3 columns of R(t) are the live landing coordinates of <b class="ci">î</b>, <b class="cj">ĵ</b>, <b class="ck">k̂</b>.</div>`;
-
-  let vecHtml = "";
-  if (S.vecAt >= 0 && S.vecAt < D.atoms.length) {
-    const a = D.atoms[S.vecAt];
-    const [x, y, z] = a.p;
-    const rx = x * ih[0] + y * jh[0] + z * kh[0];
-    const ry = x * ih[1] + y * jh[1] + z * kh[1];
-    const rz = x * ih[2] + y * jh[2] + z * kh[2];
-    vecHtml = `<div class="vec-eq"><b class="cv">${a.lab}(t)</b> = ` +
-              `(${x.toFixed(2)})<b class="ci">î(t)</b> + (${y.toFixed(2)})<b class="cj">ĵ(t)</b> + (${z.toFixed(2)})<b class="ck">k̂(t)</b> = ` +
-              `<b>[${rx.toFixed(2)}, ${ry.toFixed(2)}, ${rz.toFixed(2)}]</b></div>`;
-  }
-
-  $("matTitle").innerHTML = S.op >= 0
-    ? `Live Matrix R(t) — ${D.ops[S.op].tag}`
-    : "Identity Matrix E (at rest)";
-  $("matInfo").innerHTML =
-    `<div class="mat-badges">` +
-      `<span class="mbadge ${detClass}">det R(t) = ${d >= 0 ? "+" : ""}${d.toFixed(2)}</span>` +
-      `<span class="mbadge">Tr R(t) = ${tr >= 0 ? "+" : ""}${tr.toFixed(2)}</span>` +
-      `<span class="mbadge">${orientTxt}</span>` +
-    `</div>` +
-    eigInfo + vecHtml;
 }
 v.zoomTo();
 draw();
 </script>
 """
     html = html.replace("__H__", str(height)).replace("__DATA__", json.dumps(data))
-    components.html(html, height=height + 400)
+    components.html(html, height=height + 250)
 
 
 # title
 st.markdown("""
 <div class="ui top">
   <p class="title">Point group finder</p>
-  <p class="subtitle">Upload an .xyz file to get its point group, rotation axes, mirror planes, and 3Blue1Brown space transformations.</p>
+  <p class="subtitle">Upload an .xyz file to get its point group, rotation axes and mirror planes.</p>
 </div>
 """, unsafe_allow_html=True)
 
