@@ -8,7 +8,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from pymatgen.core import Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
-
+#.
 # wide layout
 st.set_page_config(page_title="Point group finder", page_icon="⚛️", layout="wide")
 
