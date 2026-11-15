@@ -1,0 +1,912 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point Group Finder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=STIX+Two+Text:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #E9EEEC; --panel: #F7F9F8; --sheet: #FFFFFF; --line: #D2DAD6; --line2: #B9C4BF;
+  --ink: #1D2A31; --ink2: #56656C; --ink3: #84939A;
+  --accent: #2357C2; --accent-soft: #E3EBFA; --warn: #9A6200; --warn-soft: #FBF1DD;
+  --bad: #B3261E; --bad-soft: #FBE9E7; --ok: #2E7D4F; --ok-soft: #E3F2E8;
+  --grid: rgba(29, 42, 49, .045); --halo: rgba(255,255,255,.88);
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --math: "STIX Two Text", "Cambria Math", "Times New Roman", serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12181B; --panel: #192125; --sheet: #1E272C; --line: #2C383E; --line2: #3D4B52;
+    --ink: #E2E8E6; --ink2: #A2AFB4; --ink3: #75848A;
+    --accent: #85A8F2; --accent-soft: #233150; --warn: #E3AA52; --warn-soft: #3A2D16;
+    --bad: #F2948A; --bad-soft: #3D2220; --ok: #79C796; --ok-soft: #1D3326;
+    --grid: rgba(226, 232, 230, .05); --halo: rgba(18,24,27,.88);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12181B; --panel: #192125; --sheet: #1E272C; --line: #2C383E; --line2: #3D4B52;
+  --ink: #E2E8E6; --ink2: #A2AFB4; --ink3: #75848A;
+  --accent: #85A8F2; --accent-soft: #233150; --warn: #E3AA52; --warn-soft: #3A2D16;
+  --bad: #F2948A; --bad-soft: #3D2220; --ok: #79C796; --ok-soft: #1D3326;
+  --grid: rgba(226, 232, 230, .05); --halo: rgba(18,24,27,.88);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { margin: 0; font-weight: 600; }
+sub, sup { font-size: .72em; line-height: 0; }
+.ss { display: inline-flex; flex-direction: column; vertical-align: middle; font-size: .72em; line-height: 1; margin-left: 1px; }
+.ss sup, .ss sub { font-size: 1em; line-height: 1; vertical-align: baseline; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sym { font-family: var(--math); }
+
+/* ---------- window ---------- */
+.app { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; min-height: 640px; }
+.bar { display: flex; align-items: center; gap: 14px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 15px; white-space: nowrap; }
+.brand svg { width: 26px; height: 26px; }
+.file { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; padding-left: 14px; border-left: 1px solid var(--line); }
+.file-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 50%; }
+.file-meta { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.frames { display: flex; align-items: center; gap: 4px; }
+.bar-actions { display: flex; gap: 8px; margin-left: auto; position: relative; }
+.btn { border: 1px solid var(--line2); background: var(--sheet); border-radius: 6px; padding: 6px 12px; cursor: pointer; line-height: 1.3; white-space: nowrap; }
+.btn:hover { border-color: var(--ink3); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+:root[data-theme="dark"] .btn.primary { color: #0E1630; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .btn.primary { color: #0E1630; } }
+.btn.small { padding: 3px 9px; font-size: 13px; }
+.link { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.link:disabled { color: var(--ink3); cursor: default; text-decoration: none; }
+select, input[type=number] { border: 1px solid var(--line2); background: var(--sheet); border-radius: 6px; padding: 5px 8px; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; background: var(--sheet); border: 1px solid var(--line2); border-radius: 8px; box-shadow: 0 10px 30px rgba(15, 25, 30, .14); padding: 6px; min-width: 270px; }
+.menu button { display: flex; justify-content: space-between; gap: 16px; width: 100%; text-align: left; border: 0; background: none; padding: 7px 10px; border-radius: 5px; cursor: pointer; }
+.menu button:hover { background: var(--accent-soft); }
+.menu .ext { color: var(--ink3); font-family: var(--mono); font-size: 12px; }
+.main { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(380px, 1fr); min-height: 0; }
+
+/* ---------- stage ---------- */
+.stage { position: relative; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  background-color: var(--sheet); }
+.viewport { position: relative; min-height: 0;
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; }
+#mol { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+#mol.dragging { cursor: grabbing; }
+#tags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.tag { position: absolute; left: 0; top: 0; font: 600 12px var(--sans); color: #fff; padding: 1px 7px 2px; border-radius: 5px; white-space: nowrap; will-change: transform; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; background: var(--sheet); padding: 4px 10px; cursor: pointer; color: var(--ink2); font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--line2); }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); font-weight: 500; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2); cursor: pointer; user-select: none; }
+.check input { accent-color: var(--accent); margin: 0; }
+.toolbar select { font-size: 13px; padding: 3px 6px; }
+.anim { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 12px; }
+.anim .row1 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.anim select { min-width: 0; max-width: 300px; flex: 0 1 300px; }
+.anim input[type=range] { flex: 1 1 140px; min-width: 120px; accent-color: var(--accent); }
+.caption { margin-top: 8px; min-height: 21px; font-size: 13px; color: var(--ink2); }
+.caption b { color: var(--ink); font-weight: 500; }
+.caption .ok { color: var(--ok); font-weight: 500; }
+.stage-note { position: absolute; left: 14px; bottom: 10px; font-size: 12px; color: var(--ink3); pointer-events: none; }
+.tip { position: absolute; z-index: 20; pointer-events: none; background: var(--ink); color: var(--panel); border-radius: 6px; padding: 6px 9px; font-size: 12px; line-height: 1.45; max-width: 260px; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--sheet); z-index: 5; }
+.empty-box { max-width: 470px; text-align: center; }
+.empty-box h1 { font-size: 26px; letter-spacing: -.02em; line-height: 1.2; }
+.empty-box p { color: var(--ink2); margin: 10px 0 18px; }
+.empty-box .try { margin-top: 16px; color: var(--ink2); line-height: 1.9; }
+.empty-box .try .link { margin: 0 3px; }
+.drop-glow { position: absolute; inset: 10px; border: 2px dashed var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--accent) 7%, transparent); display: grid; place-items: center; font-weight: 600; color: var(--accent); z-index: 25; pointer-events: none; }
+
+/* ---------- panel ---------- */
+.panel { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); min-height: 0; background: var(--panel); position: relative; }
+.result { padding: 18px 20px 16px; border-bottom: 1px solid var(--line); }
+.ct { display: grid; grid-template-columns: auto minmax(0, 1fr); border: 1.5px solid var(--ink); background: var(--sheet); }
+.ct-pg { font-family: var(--math); font-size: 46px; line-height: 1; padding: 12px 18px 14px; border-right: 1.5px solid var(--ink); display: flex; align-items: center; min-width: 96px; justify-content: center; }
+.ct-pg sub { font-size: .55em; }
+.ct-classes { display: flex; flex-wrap: wrap; align-content: center; }
+.ct-classes span { font-family: var(--math); font-size: 19px; padding: 8px 11px; white-space: nowrap; }
+.ct-classes .n { font-family: var(--math); }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 10px; color: var(--ink2); font-size: 13px; }
+.meta b { color: var(--ink); font-weight: 500; }
+.tolrow { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.tolrow label { font-size: 13px; color: var(--ink2); white-space: nowrap; }
+.tolrow input[type=range] { flex: 1; min-width: 80px; accent-color: var(--accent); }
+.tolrow output { font-family: var(--mono); font-size: 13px; min-width: 62px; text-align: right; }
+.callout { margin-top: 12px; border-left: 3px solid var(--warn); background: var(--warn-soft); padding: 9px 12px; border-radius: 0 8px 8px 0; font-size: 13px; }
+.callout.bad { border-color: var(--bad); background: var(--bad-soft); }
+.callout.info { border-color: var(--accent); background: var(--accent-soft); }
+.tabs { display: flex; gap: 2px; padding: 0 14px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs button { border: 0; background: none; padding: 11px 10px 9px; cursor: pointer; color: var(--ink2); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; font-weight: 500; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.body { overflow: auto; padding: 16px 20px 40px; }
+.body section + section { margin-top: 22px; }
+.body h2 { font-size: 15px; margin-bottom: 4px; }
+.note { color: var(--ink2); margin: 0 0 10px; max-width: 62ch; font-size: 13.5px; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.row.space { justify-content: space-between; }
+.busy { position: absolute; left: 0; right: 0; top: 0; height: 2px; overflow: hidden; z-index: 3; }
+.busy::after { content: ""; position: absolute; left: -30%; width: 30%; height: 100%; background: var(--accent); animation: slide 1s linear infinite; }
+@keyframes slide { to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .busy::after { animation: none; left: 0; width: 100%; opacity: .5; } }
+
+.list { border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); overflow: hidden; }
+.list .group { padding: 7px 12px 5px; font-size: 12.5px; color: var(--ink2); background: var(--panel); border-top: 1px solid var(--line); }
+.list .group:first-child { border-top: 0; }
+.item { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line); background: none; padding: 8px 12px; cursor: pointer; }
+.list .group + .item { border-top: 0; }
+.item:hover { background: var(--accent-soft); }
+.item[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.item .dot { width: 11px; height: 11px; border-radius: 50%; }
+.item .name { font-family: var(--math); font-size: 16px; }
+.item .desc { display: block; font-family: var(--sans); font-size: 12.5px; color: var(--ink2); }
+.item .fit { font-family: var(--mono); font-size: 12px; color: var(--ink2); text-align: right; white-space: nowrap; }
+.stepper { display: inline-flex; gap: 4px; }
+table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.data th { text-align: left; font-weight: 500; color: var(--ink2); padding: 6px 8px; border-bottom: 1px solid var(--line2); position: sticky; top: 0; background: var(--sheet); }
+table.data td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+table.data td.num, table.data th.num { text-align: right; }
+table.data td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+table.data tr.cur td { background: var(--accent-soft); font-weight: 500; }
+table.data tr.clickable { cursor: pointer; }
+table.data tr.clickable:hover td { background: var(--accent-soft); }
+.scroll { border: 1px solid var(--line); border-radius: 8px; background: var(--sheet); overflow: auto; }
+.tagx { display: inline-block; padding: 0 7px; border-radius: 99px; font-size: 12px; font-weight: 500; }
+.tagx.ok { background: var(--ok-soft); color: var(--ok); }
+.tagx.no { background: var(--warn-soft); color: var(--warn); }
+
+.status { display: flex; align-items: center; gap: 14px; padding: 6px 18px; border-top: 1px solid var(--line); background: var(--panel); color: var(--ink2); font-size: 12px; }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink3); display: inline-block; margin-right: 6px; }
+.status .dot.ready { background: var(--ok); }
+.status .dot.fail { background: var(--bad); }
+.status .credit { margin-left: auto; font-style: italic; }
+.toast { position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 9px 14px; border-radius: 8px; z-index: 50; max-width: min(560px, calc(100% - 32px)); font-size: 13px; }
+
+@media (max-width: 900px) {
+  .app { height: auto; min-height: 100vh; }
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .stage { height: 82vh; min-height: 520px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .panel { min-height: 60vh; }
+  .body { overflow: visible; }
+  .bar { flex-wrap: wrap; }
+  .file { order: 3; flex-basis: 100%; border-left: 0; padding-left: 0; }
+  .ct-pg { font-size: 38px; min-width: 80px; }
+  .stage-note { display: none; }
+}
+@media (max-width: 520px) { .brand span { display: none; } .toolbar .sep { display: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <svg viewBox="0 0 26 26" aria-hidden="true">
+        <ellipse cx="13" cy="15" rx="10.5" ry="4.2" fill="none" stroke="#D08A00" stroke-width="1.5"/>
+        <line x1="13" y1="2" x2="13" y2="24" stroke="#C2412D" stroke-width="1.8"/>
+        <circle cx="5.5" cy="15.5" r="2.6" fill="#909090" stroke="currentColor" stroke-width="1"/>
+        <circle cx="20.5" cy="15.5" r="2.6" fill="#909090" stroke="currentColor" stroke-width="1"/>
+        <circle cx="13" cy="9" r="2.6" fill="#909090" stroke="currentColor" stroke-width="1"/>
+      </svg>
+      <span>Point Group Finder</span>
+    </div>
+    <div class="file" id="fileInfo" hidden>
+      <span class="file-name" id="fileName"></span>
+      <span class="file-meta" id="fileMeta"></span>
+      <span class="frames" id="frames" hidden>
+        <button class="btn small" id="framePrev" aria-label="Previous frame">‹</button>
+        <select id="frameSel" aria-label="Frame"></select>
+        <button class="btn small" id="frameNext" aria-label="Next frame">›</button>
+      </span>
+    </div>
+    <div class="bar-actions">
+      <button class="btn" id="openBtn">Open .xyz</button>
+      <button class="btn primary" id="dlBtn" disabled aria-haspopup="true" aria-expanded="false">Download</button>
+      <div class="menu" id="dlMenu" hidden role="menu">
+        <button role="menuitem" data-dl="report"><span>Result with every operation</span><span class="ext">.txt</span></button>
+        <button role="menuitem" data-dl="xyz"><span>Centred coordinates</span><span class="ext">.xyz</span></button>
+        <button role="menuitem" data-dl="png"><span>Picture of the view</span><span class="ext">.png</span></button>
+      </div>
+      <input type="file" id="fileInput" accept=".xyz,.txt,text/plain" hidden>
+    </div>
+  </header>
+
+  <div class="main">
+    <section class="stage" id="stage" aria-label="Molecule and its symmetry elements">
+      <div class="toolbar">
+        <div class="seg" role="group" aria-label="Drawing style" id="styleSeg"></div>
+        <span class="sep"></span>
+        <label class="check">Atom labels
+          <select id="atomLab"><option value="off">Off</option><option value="el">C, H</option><option value="num">C1, C2 …</option></select></label>
+        <label class="check"><input type="checkbox" id="tTags" checked>Element names</label>
+        <label class="check"><input type="checkbox" id="tFill" checked>Plane fill</label>
+        <label class="check"><input type="checkbox" id="tMark" checked>Mark atoms on elements</label>
+        <button class="btn small" id="resetView">Reset view</button>
+      </div>
+      <div class="viewport" id="viewport">
+        <canvas id="mol" aria-label="3D molecule with its symmetry elements. Drag to rotate, scroll to zoom."></canvas>
+        <div id="tags"></div>
+        <div class="stage-note">Drag to rotate, scroll to zoom, double-click to reset.</div>
+        <div class="tip" id="tip" hidden></div>
+      </div>
+      <div class="anim">
+        <div class="row1">
+          <select id="opSel" aria-label="Operation to animate"></select>
+          <button class="btn primary small" id="play" disabled>Play</button>
+          <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="Animation progress">
+          <label class="check"><input type="checkbox" id="tLoop" checked>Loop</label>
+          <label class="check"><input type="checkbox" id="tGhost" checked>Start positions</label>
+        </div>
+        <div class="caption" id="caption"></div>
+      </div>
+      <div class="empty" id="empty">
+        <div class="empty-box">
+          <h1>Drop an .xyz file to find its point group</h1>
+          <p>You get the point group, every rotation axis and mirror plane drawn on the molecule, and an animation of each symmetry operation. Everything runs in your browser.</p>
+          <button class="btn primary" id="emptyOpen">Open .xyz file</button>
+          <div class="try" id="try"></div>
+        </div>
+      </div>
+      <div class="drop-glow" id="dropGlow" hidden>Drop the .xyz file to open it</div>
+    </section>
+
+    <section class="panel" aria-label="Result">
+      <div class="result" id="result"></div>
+      <nav class="tabs" role="tablist" id="tabs"></nav>
+      <div class="body" id="body"></div>
+      <div class="busy" id="busy" hidden></div>
+    </section>
+  </div>
+
+  <footer class="status">
+    <span><span class="dot" id="engineDot"></span><span id="engineText">Starting Python in your browser…</span></span>
+    <span class="credit">Made by George</span>
+  </footer>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+const PY_FILES = /*__PY_FILES__*/{};
+const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/";
+const STORE_KEY = "point-group-finder-v1";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* ---------------- numbers ---------------- */
+function trimNum(s) { let [m, e] = s.split("e"); if (m.includes(".")) m = m.replace(/0+$/, "").replace(/\.$/, ""); return e !== undefined ? `${m}e${e}` : m; }
+const fix = (v, d = 3) => (v === null || v === undefined || !isFinite(v)) ? "–" : Number(v).toFixed(d);
+const plural = (n, one, many) => `${n.toLocaleString("en-GB")} ${n === 1 ? one : (many || one + "s")}`;
+const fitText = (d) => d === null || d === undefined ? "" : d < 0.0005 ? "exact" : `${fix(d, 3)} Å`;
+
+/* ---------------- element colours (Jmol) ---------------- */
+const CPK = { H: "#FFFFFF", B: "#FFB5B5", C: "#909090", N: "#3050F8", O: "#FF0D0D", F: "#90E050", Na: "#AB5CF2", Mg: "#8AFF00", Al: "#BFA6A6", Si: "#F0C8A0",
+  P: "#FF8000", S: "#FFFF30", Cl: "#1FF01F", K: "#8F40D4", Ca: "#3DFF00", Ti: "#BFC2C7", V: "#A6A6AB", Cr: "#8A99C7", Mn: "#9C7AC7", Fe: "#E06633",
+  Co: "#F090A0", Ni: "#50D050", Cu: "#C88033", Zn: "#7D80B0", Ga: "#C28F8F", Ge: "#668F8F", As: "#BD80E3", Se: "#FFA100", Br: "#A62929", Mo: "#54B5B5",
+  Ru: "#248F8F", Rh: "#0A7D8C", Pd: "#006985", Ag: "#C0C0C0", Sn: "#668080", I: "#940094", Xe: "#429EB0", W: "#2194D6", Pt: "#D0D0E0", Au: "#FFD123" };
+const colorOf = (s) => CPK[s] || "#D7A6E0";
+function shade(hex, f) {
+  const n = parseInt(hex.slice(1), 16); let r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  if (f > 0) { r += (255 - r) * f; g += (255 - g) * f; b += (255 - b) * f; } else { r *= 1 + f; g *= 1 + f; b *= 1 + f; }
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const isLight = (hex) => { const n = parseInt(hex.slice(1), 16); return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 150; };
+
+/* ---------------- small UI helpers ---------------- */
+let toastTimer = null;
+function toast(msg, ms = 3800) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), ms); }
+function download(name, data, type = "text/plain") {
+  const blob = data instanceof Blob ? data : new Blob([data], { type });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 600);
+}
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+/* ---------------- Python runner (a background worker, or the page itself as a fallback) ---------------- */
+const WORKER_SRC = `
+let py = null, bridge = null;
+self.onmessage = async (e) => {
+  const { id, cmd, args } = e.data;
+  try {
+    if (cmd === "init") {
+      importScripts(args.url + "pyodide.js");
+      self.postMessage({ progress: "Downloading Python…" });
+      py = await loadPyodide({ indexURL: args.url });
+      self.postMessage({ progress: "Loading NumPy…" });
+      await py.loadPackage(["numpy"]);
+      py.runPython("import sys, os; os.makedirs('/home/pyodide/pgf', exist_ok=True); sys.path.insert(0, '/home/pyodide/pgf')");
+      for (const [n, s] of Object.entries(args.files)) py.FS.writeFile('/home/pyodide/pgf/' + n, s);
+      bridge = py.pyimport("bridge");
+      self.postMessage({ id, ok: true, result: null });
+    } else {
+      self.postMessage({ id, ok: true, result: bridge[cmd](...args) });
+    }
+  } catch (err) { self.postMessage({ id, ok: false, error: String((err && err.message) || err) }); }
+};`;
+const runner = {
+  mode: null, worker: null, seq: 0, pending: {}, bridge: null,
+  async init(onProgress) {
+    if (!window.__PGF_NO_WORKER && typeof Worker !== "undefined") {
+      try {
+        this.worker = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })));
+        this.worker.onmessage = (e) => {
+          const d = e.data;
+          if (d.progress) return onProgress(d.progress);
+          const p = this.pending[d.id]; if (!p) return; delete this.pending[d.id];
+          d.ok ? p.res(d.result) : p.rej(new Error(d.error));
+        };
+        this.worker.onerror = (e) => { Object.values(this.pending).forEach((p) => p.rej(new Error(e.message || "worker error"))); this.pending = {}; };
+        this.mode = "worker";
+        await this.send("init", { url: PYODIDE_URL, files: PY_FILES });
+        return;
+      } catch (e) { if (this.worker) this.worker.terminate(); this.worker = null; console.warn("Worker failed, running Python in the page:", e); }
+    }
+    this.mode = "page";
+    if (typeof loadPyodide !== "function") {
+      await new Promise((res, rej) => { const s = document.createElement("script"); s.src = PYODIDE_URL + "pyodide.js"; s.onload = res; s.onerror = () => rej(new Error("couldn’t download Pyodide")); document.head.append(s); });
+    }
+    onProgress("Downloading Python…");
+    const py = await loadPyodide({ indexURL: PYODIDE_URL });
+    onProgress("Loading NumPy…"); await py.loadPackage(["numpy"]);
+    py.runPython("import sys, os; os.makedirs('/home/pyodide/pgf', exist_ok=True); sys.path.insert(0, '/home/pyodide/pgf')");
+    for (const [n, s] of Object.entries(PY_FILES)) py.FS.writeFile("/home/pyodide/pgf/" + n, s);
+    this.bridge = py.pyimport("bridge");
+  },
+  send(cmd, args) { return new Promise((res, rej) => { const id = ++this.seq; this.pending[id] = { res, rej }; this.worker.postMessage({ id, cmd, args }); }); },
+  async call(cmd, ...args) {
+    if (this.mode === "worker") return JSON.parse(await this.send(cmd, args));
+    await new Promise((r) => setTimeout(r, 10));
+    return JSON.parse(this.bridge[cmd](...args));
+  },
+};
+
+/* ---------------- state ---------------- */
+let EXAMPLES = [], ready = false, queued = null, anSeq = 0;
+let state = { tol: 0.3, tab: "elements", style: "Ball and stick", atomLab: "off", tags: true, fill: true, mark: true, loop: true, ghost: true };
+let file = null;   // { name, text, frames, frame }
+let res = null;    // the analysis
+let S = { el: "all", op: -1, t: 0, playing: false };   // what the viewer shows
+let ELS = [];      // symmetry elements in display order
+let scanRows = null;
+
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ ...state, file: file && file.text && file.text.length < 600000 ? { name: file.name, text: file.text, frame: file.frame } : null })); }
+  catch (e) { /* storage blocked or full: the app still works */ }
+}
+function restore() { try { return JSON.parse(localStorage.getItem(STORE_KEY) || "null"); } catch (e) { return null; } }
+
+function setEngine(kind, text) {
+  $("engineDot").className = "dot" + (kind === "ready" ? " ready" : kind === "fail" ? " fail" : "");
+  $("engineText").textContent = text;
+}
+async function boot() {
+  const saved = restore();
+  if (saved) { const { file: f, ...rest } = saved; Object.assign(state, rest); }
+  wireToolbar(); renderResult(); renderTabs(); renderBody();
+  const timer = setTimeout(() => { if (!ready) setEngine("fail", "Python is taking unusually long. Check your connection, then reload the page."); }, 90000);
+  try {
+    await runner.init((t) => setEngine("busy", t));
+    const o = await runner.call("options");
+    EXAMPLES = o.examples; ready = true; clearTimeout(timer);
+    setEngine("ready", runner.mode === "worker" ? "Python ready (runs in your browser, nothing is uploaded)" : "Python ready (runs in this page, nothing is uploaded)");
+    renderTry();
+    if (queued) { const q = queued; queued = null; await openText(q.name, q.text, 0); }
+    else if (saved && saved.file) await openText(saved.file.name, saved.file.text, saved.file.frame || 0);
+  } catch (e) {
+    clearTimeout(timer);
+    setEngine("fail", `Python couldn’t start (${e.message}). Reload the page; if it keeps failing, your network may block cdn.jsdelivr.net.`);
+  }
+}
+const EX_NAMES = { water: "water", ammonia: "ammonia", methane: "methane", ethane: "ethane", allene: "allene", benzene: "benzene", co2: "CO₂", sf6: "SF₆", cubane: "cubane", adamantane: "adamantane", c60: "C₆₀" };
+function renderTry() {
+  $("try").innerHTML = "Or try " + EXAMPLES.map((k) => `<button class="link" data-ex="${k}" ${ready ? "" : "disabled"}>${EX_NAMES[k] || k}</button>`).join("");
+}
+
+/* ---------------- files ---------------- */
+async function readFile(f) {
+  const text = await f.text();
+  if (!ready) { queued = { name: f.name, text }; toast("The file will open as soon as Python has started."); return; }
+  await openText(f.name, text, 0);
+}
+async function openText(name, text, frame) {
+  const r = await runner.call("load", name, text);
+  if (!r.ok) { toast(`${name}: ${r.error}`, 7000); return; }
+  file = { name, text, frames: r.frames, frame: Math.min(frame, r.frames.length - 1) };
+  view.reset = true; scanRows = null;
+  renderFileInfo(); await analyse(); save();
+}
+async function openExample(key) {
+  if (!ready) return;
+  const r = await runner.call("example", key);
+  if (!r.ok) return toast(r.error);
+  file = { name: r.name, text: PY_FILES[r.name] || "", frames: r.frames, frame: 0 };
+  view.reset = true; scanRows = null;
+  renderFileInfo(); await analyse(); save();
+}
+function renderFileInfo() {
+  $("fileInfo").hidden = !file; $("empty").hidden = !!file;
+  if (!file) return;
+  $("fileName").textContent = file.name;
+  const fr = file.frames[file.frame];
+  $("fileMeta").textContent = fr.comment ? fr.comment.slice(0, 80) : ""; $("fileMeta").title = fr.comment || "";
+  $("frames").hidden = file.frames.length < 2;
+  if (file.frames.length > 1) {
+    $("frameSel").innerHTML = file.frames.map((f, k) => `<option value="${k}">Frame ${k + 1} of ${file.frames.length}</option>`).join("");
+    $("frameSel").value = file.frame;
+  }
+}
+
+/* ---------------- analysis ---------------- */
+async function analyse() {
+  if (!file || !ready) return;
+  const seq = ++anSeq; $("busy").hidden = false;
+  try {
+    const r = await runner.call("analyse", file.frame, state.tol);
+    if (seq !== anSeq) return;
+    if (!r.ok) { toast(r.error, 6000); return; }
+    const prevPg = res && res.pg, prevN = res && res.n;
+    res = r;
+    ELS = [];
+    [...res.axes].sort((a, b) => (b.n || 99) - (a.n || 99)).forEach((a) => ELS.push({ kind: "axis", ...a }));
+    res.planes.forEach((p) => ELS.push({ kind: "plane", ...p }));
+    if (res.has_i) ELS.push({ kind: "i", name: "Inversion centre", short: "i", color: cssVar("--ink") || "#1D2A31", on: res.i_on, dev: res.i_dev });
+    if (prevN !== res.n || view.reset) view.reset = true;
+    if (prevPg !== res.pg || prevN !== res.n) { S.el = "all"; S.op = -1; S.t = 0; S.playing = false; }
+    if (typeof S.el === "number" && S.el >= ELS.length) S.el = "all";
+    if (S.op >= res.ops.length) S.op = -1;
+    renderResult(); renderOps(); renderTabs(); renderBody(); view.draw(); renderCaption();
+    $("dlBtn").disabled = false;
+  } catch (e) { toast("Something went wrong: " + e.message, 7000); }
+  finally { if (seq === anSeq) $("busy").hidden = true; }
+}
+const reanalyse = debounce(() => { save(); scanRowsMark(); analyse(); }, 250);
+function scanRowsMark() { if (state.tab === "tolerance") renderBody(true); }
+
+/* ---------------- result card ---------------- */
+function classesHTML(c) {
+  const count = c[0] === 0 ? "∞" : c[0] > 1 ? c[0] : "";
+  return `<span>${count}${c[1]}</span>`;
+}
+function renderResult() {
+  const box = $("result");
+  if (!res) {
+    box.innerHTML = `<div class="ct"><div class="ct-pg">?</div><div class="ct-classes"><span style="font-family:var(--sans);font-size:14px;color:var(--ink2)">The point group and its classes of operations appear here.</span></div></div>${tolRow()}`;
+    wireTol(); return;
+  }
+  const mirrors = res.linear ? "∞" : res.planes.length;
+  const axesN = res.linear ? "1 (C∞)" : res.axes.length;
+  let warn = "";
+  if (!res.consistent) warn = `<div class="callout bad">Found ${res.order} operations, but ${res.pg_html} has ${res.expected_order}. The tolerance is probably too loose or too tight for this structure: see the Tolerance tab.</div>`;
+  else if (res.pg === "Kh") warn = `<div class="callout info">A single atom looks the same from every direction: full spherical symmetry, K<sub>h</sub>.</div>`;
+  else if (res.linear) warn = `<div class="callout info">A linear molecule has infinitely many operations. The view shows the axis and a few of its mirror planes.</div>`;
+  box.innerHTML = `
+    <div class="ct" aria-label="Point group and classes of symmetry operations">
+      <div class="ct-pg">${res.pg_html}</div>
+      <div class="ct-classes">${res.classes.map(classesHTML).join("")}</div>
+    </div>
+    <div class="meta"><span>Order <b>h = ${res.linear ? "∞" : res.order}</b></span><span>Formula <b>${esc(res.formula).replace(/(\d+)/g, "<sub>$1</sub>")}</b></span><span>Atoms <b>${res.n}</b></span><span>Axes <b>${axesN}</b></span><span>Mirror planes <b>${mirrors}</b></span><span>Inversion centre <b>${res.has_i ? "yes" : "no"}</b></span></div>
+    ${warn}${tolRow()}`;
+  wireTol();
+}
+function tolRow() {
+  return `<div class="tolrow"><label for="tol">Tolerance</label><input type="range" id="tol" min="0.01" max="1" step="0.01" value="${state.tol}"><output id="tolOut">${fix(state.tol, 2)} Å</output></div>`;
+}
+function wireTol() {
+  const t = $("tol"); if (!t) return;
+  t.oninput = () => { state.tol = +t.value; $("tolOut").textContent = fix(state.tol, 2) + " Å"; reanalyse(); };
+}
+
+/* ---------------- panel tabs ---------------- */
+const TABS = [["elements", "Elements"], ["operations", "Operations"], ["tolerance", "Tolerance"], ["atoms", "Atoms"]];
+function renderTabs() { $("tabs").innerHTML = TABS.map(([k, t]) => `<button role="tab" aria-selected="${state.tab === k}" data-tab="${k}">${t}</button>`).join(""); }
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-tab]"); if (!b) return; state.tab = b.dataset.tab; save(); renderTabs(); renderBody(); $("body").scrollTop = 0; });
+function renderBody(keep) {
+  const body = $("body"), top = body.scrollTop;
+  if (!res) { body.innerHTML = `<p class="note">${ready ? "Open an .xyz file or pick an example." : "This panel fills in once Python has started and a file is open."}</p>`; return; }
+  ({ elements: renderElements, operations: renderOperations, tolerance: renderTolerance, atoms: renderAtoms })[state.tab]();
+  if (keep) body.scrollTop = top;
+}
+const fitCell = (d) => d === null || d === undefined ? "" : `<span class="fit" title="Largest distance between an atom and the identical atom it lands on">${fitText(d)}</span>`;
+function onWhere(e) { const n = e.on ? e.on.length : 0; return n ? `${plural(n, "atom")} on it` : "no atoms on it"; }
+function renderElements() {
+  if (!ELS.length) { $("body").innerHTML = `<p class="note">This structure has no symmetry elements apart from the identity E${res.pg === "C1" ? ", so its point group is C<sub>1</sub>" : ""}. If you expected symmetry, try a larger tolerance.</p>`; return; }
+  const btn = (v, t) => `<button data-show="${v}" aria-pressed="${S.el === v}">${t}</button>`;
+  const groups = [["axis", "Rotation axes"], ["plane", "Mirror planes"], ["i", "Centre"]];
+  $("body").innerHTML = `
+    <section>
+      <div class="row space" style="margin-bottom:10px">
+        <div class="seg">${btn("all", "All")}${res.axes.length ? btn("axes", "Axes") : ""}${res.planes.length ? btn("planes", "Planes") : ""}</div>
+        <div class="stepper"><button class="btn small" data-step="-1" aria-label="Previous element">‹ Previous</button><button class="btn small" data-step="1" aria-label="Next element">Next ›</button></div>
+      </div>
+      <div class="list">${groups.map(([k, title]) => {
+        const idx = ELS.map((e, i) => i).filter((i) => ELS[i].kind === k);
+        if (!idx.length) return "";
+        return `<div class="group">${title}</div>` + idx.map((i) => { const e = ELS[i]; return `<button class="item" data-el="${i}" aria-pressed="${S.el === i}"><span class="dot" style="background:${e.color}"></span><span><span class="name">${e.name}</span><span class="desc">${onWhere(e)}</span></span>${fitCell(e.dev)}</button>`; }).join("");
+      }).join("")}</div>
+      <p class="note" style="margin-top:8px">Click an element to show it alone. The number on the right is how far the worst atom misses its identical partner under that element’s operations; it must stay below the tolerance.</p>
+    </section>`;
+}
+function renderOperations() {
+  if (!res.ops.length) { $("body").innerHTML = `<p class="note">Only the identity E: nothing to animate.</p>`; return; }
+  let html = "", last = null;
+  res.ops.forEach((o, i) => {
+    if (o.group !== last) { html += `<div class="group">${o.group}</div>`; last = o.group; }
+    html += `<button class="item" data-op="${i}" aria-pressed="${S.op === i}"><span class="dot" style="background:${o.color}"></span><span><span class="name">${o.name}</span><span class="desc">${o.desc}</span></span>${fitCell(o.dev)}</button>`;
+  });
+  $("body").innerHTML = `<section><p class="note">Every operation of the group except E. Click one to watch the molecule do it. The number on the right is the largest distance (Å) between an atom’s image and the identical atom it lands on.</p><div class="list">${html}</div></section>`;
+}
+async function renderTolerance() {
+  $("body").innerHTML = `<section><h2>Does the answer depend on the tolerance?</h2>
+    <p class="note">The tolerance is how far an atom may be from its symmetric partner and still count. Real structures from optimisations or crystals are never perfectly symmetric, so the point group can change with it. A trustworthy answer stays the same over a wide range.</p>
+    <div id="scanBox"><p class="note">Checking nine tolerances…</p></div></section>`;
+  if (!scanRows) {
+    const r = await runner.call("scan", file.frame);
+    if (!r.ok) { $("scanBox").innerHTML = `<p class="note">${esc(r.error)}</p>`; return; }
+    scanRows = r.rows;
+  }
+  if (state.tab !== "tolerance") return;
+  const cur = scanRows.reduce((b, r) => Math.abs(r.tol - state.tol) < Math.abs(b.tol - state.tol) ? r : b, scanRows[0]);
+  $("scanBox").innerHTML = `<div class="scroll"><table class="data"><thead><tr><th class="num">Tolerance</th><th>Point group</th><th class="num">Order h</th><th>Consistent</th></tr></thead><tbody>
+    ${scanRows.map((r) => `<tr class="clickable ${r === cur ? "cur" : ""}" data-tol="${r.tol}"><td class="num">${fix(r.tol, 2)} Å</td><td class="sym" style="font-size:16px">${r.pg_html}</td><td class="num">${r.order === null ? "∞" : r.order}</td><td>${r.consistent ? `<span class="tagx ok">yes</span>` : `<span class="tagx no">no</span>`}</td></tr>`).join("")}
+    </tbody></table></div><p class="note" style="margin-top:8px">Click a row to use that tolerance. “Consistent” means the number of operations found equals the order of the group, as it must.</p>`;
+}
+function renderAtoms() {
+  const on = res.labels.map(() => []);
+  ELS.forEach((e) => (e.on || []).forEach((j) => on[j].push(e.short)));
+  $("body").innerHTML = `<section><p class="note">Coordinates in Å with the centre of mass moved to the origin (the original centre was ${res.center.map((v) => fix(v, 3)).join(", ")}).</p>
+    <div class="scroll"><table class="data"><thead><tr><th>Atom</th><th class="num">x</th><th class="num">y</th><th class="num">z</th><th>Lies on</th></tr></thead><tbody>
+    ${res.labels.map((l, i) => `<tr><td>${l}</td><td class="num">${fix(res.coords[i][0], 4)}</td><td class="num">${fix(res.coords[i][1], 4)}</td><td class="num">${fix(res.coords[i][2], 4)}</td><td class="sym">${[...new Set(on[i])].join(", ")}</td></tr>`).join("")}
+    </tbody></table></div></section>`;
+}
+$("body").addEventListener("click", (e) => {
+  const t = e.target;
+  const sh = t.closest("[data-show]"); if (sh) return showEl(sh.dataset.show);
+  const el = t.closest("[data-el]"); if (el) return showEl(+el.dataset.el);
+  const st = t.closest("[data-step]"); if (st) return stepEl(+st.dataset.step);
+  const op = t.closest("[data-op]"); if (op) return pickOp(+op.dataset.op);
+  const tr = t.closest("[data-tol]"); if (tr) { state.tol = +tr.dataset.tol; renderResult(); save(); analyse().then(() => renderBody(true)); }
+});
+function showEl(v) { S.el = v; if (S.op >= 0) { S.op = -1; S.playing = false; $("opSel").value = "-1"; } view.draw(); renderBody(true); renderCaption(); }
+function stepEl(d) { if (!ELS.length) return; let i = typeof S.el === "number" ? S.el + d : (d > 0 ? 0 : ELS.length - 1); showEl((i + ELS.length) % ELS.length); }
+
+/* ---------------- animation ---------------- */
+function renderOps() {
+  const sel = $("opSel");
+  if (!res || !res.ops.length) { sel.innerHTML = `<option value="-1">${res ? "Only E, nothing to animate" : "Open a molecule first"}</option>`; $("play").disabled = true; return; }
+  let html = `<option value="-1">Pick an operation to animate</option>`, last = null;
+  res.ops.forEach((o, i) => {
+    if (o.group !== last) { if (last) html += "</optgroup>"; html += `<optgroup label="${o.group}">`; last = o.group; }
+    html += `<option value="${i}">${o.name.replace(/<span class='ss'><sup>(\d+)<\/sup><sub>(\d+)<\/sub><\/span>/g, "$2^$1").replace(/<[^>]+>/g, "")}</option>`;
+  });
+  sel.innerHTML = html + "</optgroup>"; sel.value = String(S.op);
+  $("play").disabled = S.op < 0;
+}
+function pickOp(i) {
+  S.op = i; S.t = 0; S.playing = i >= 0; $("opSel").value = String(i);
+  if (state.tab === "operations") renderBody(true);
+  view.draw(); renderCaption(); $("play").disabled = i < 0; $("play").textContent = S.playing ? "Pause" : "Play";
+  if (S.playing) start();
+}
+$("opSel").onchange = (e) => pickOp(+e.target.value);
+$("play").onclick = () => {
+  if (S.op < 0) return;
+  if (S.playing) { S.playing = false; $("play").textContent = "Play"; return; }
+  if (S.t >= 1) S.t = 0;
+  S.playing = true; $("play").textContent = "Pause"; start();
+};
+$("scrub").oninput = (e) => { if (S.op < 0) return; S.playing = false; $("play").textContent = "Play"; S.t = e.target.value / 1000; view.draw(); renderCaption(); };
+let last = null, hold = 0;
+function start() { last = null; hold = 0; requestAnimationFrame(tick); }
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function tick(ts) {
+  if (!S.playing || S.op < 0) return;
+  if (last === null) last = ts;
+  const dt = Math.min((ts - last) / 1000, 0.1); last = ts;
+  const dur = res.ops[S.op].kind === "S" ? 3.4 : 2.2;
+  if (hold > 0) { hold -= dt; if (hold <= 0) { if (state.loop) S.t = 0; else { S.playing = false; $("play").textContent = "Play"; renderCaption(); return; } } }
+  else { S.t = reduceMotion ? 1 : Math.min(1, S.t + dt / dur); if (S.t >= 1) hold = 1.0; }
+  view.draw(); renderCaption();
+  requestAnimationFrame(tick);
+}
+let lastCap = "";
+function renderCaption() {
+  $("scrub").value = Math.round(S.t * 1000);
+  let txt = "";
+  if (!res) txt = "";
+  else if (S.op < 0) {
+    if (typeof S.el === "number") { const e = ELS[S.el]; txt = `<b>${e.name}</b>: ${onWhere(e)}${e.dev !== null && e.dev !== undefined ? (e.dev < 0.0005 ? ", fits exactly" : `, fits to ${fix(e.dev, 3)} Å`) : ""}. Element ${S.el + 1} of ${ELS.length}.`; }
+    else txt = res.ops.length ? "Pick a symmetry operation to watch the molecule do it." : "";
+  } else {
+    const o = res.ops[S.op];
+    txt = o.desc + ".";
+    if (o.kind === "S") txt += S.t < 0.5 ? " <b>Step 1: rotating.</b>" : " <b>Step 2: reflecting.</b>";
+    if (S.t >= 1) txt += ` <span class="ok">Every atom lands on an identical atom${o.dev >= 0.0005 ? ` (within ${fix(o.dev, 3)} Å)` : ""}, so this is a symmetry operation.</span>`;
+  }
+  if (txt !== lastCap) { $("caption").innerHTML = txt; lastCap = txt; }
+}
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const add = (a, b, s = 1) => [a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const norm = (a) => mul(a, 1 / Math.hypot(...a));
+function basis(n) { const a = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]; const e1 = norm(add(a, n, -dot(a, n))); return { n, e1, e2: cross(n, e1) }; }
+function rotate(p, u, a) { const c = Math.cos(a), s = Math.sin(a); return add(add(mul(p, c), cross(u, p), s), u, dot(u, p) * (1 - c)); }
+function reflect(p, n, s) { return add(p, n, -2 * s * dot(p, n)); }
+const ease = (x) => x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+function pos(p, op, t) {     // the original app's animation, unchanged
+  if (op.kind === "C") return rotate(p, op.u, op.a * ease(t));
+  if (op.kind === "s") return reflect(p, op.n, ease(t));
+  if (op.kind === "i") return mul(p, 1 - 2 * ease(t));
+  if (t < 0.5) return rotate(p, op.u, op.a * ease(2 * t));
+  return reflect(rotate(p, op.u, op.a), op.u, ease(2 * t - 1));
+}
+
+/* =================================================================
+   3D view: atoms, bonds, axes and planes on one canvas, drawn back to front
+   ================================================================= */
+const STYLES = {
+  "Ball and stick": { r: (i) => 0.25 * res.vdw[i], bond: 0.14 },
+  "Sticks": { r: () => 0.18, bond: 0.18 },
+  "Space filling": { r: (i) => 0.9 * res.vdw[i], bond: 0 },
+};
+const view = {
+  canvas: $("mol"), R: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], zoom: 1, pan: [0, 0], reset: true, size: 2, P: [], hover: null, tagEls: [],
+  orient() {
+    const X = res.coords;
+    let r = 0; X.forEach((p) => (r = Math.max(r, Math.hypot(...p))));
+    this.size = Math.max(r, 1.0);
+    let up = null;
+    const main = [...res.axes].sort((a, b) => (b.n || 99) - (a.n || 99))[0];
+    if (main) up = norm(main.u);
+    else {
+      const cov = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+      X.forEach((p) => { for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) cov[a][b] += p[a] * p[b]; });
+      const { vals, vecs } = jacobi3(cov); const k = vals.indexOf(Math.max(...vals)); up = [vecs[0][k], vecs[1][k], vecs[2][k]];
+    }
+    let side = X.map((p) => add(p, up, -dot(p, up))).sort((a, b) => Math.hypot(...b) - Math.hypot(...a))[0];
+    if (!side || Math.hypot(...side) < 1e-3) side = basis(up).e1;
+    side = norm(side);
+    const fwd = cross(side, up);
+    this.R = matMul(matMul(rotX(0.3), rotY(-0.42)), [side, up, fwd]);
+    this.zoom = 1; this.pan = [0, 0];
+  },
+  project(p, w, h) {
+    const R = this.R, v = [R[0][0] * p[0] + R[0][1] * p[1] + R[0][2] * p[2], R[1][0] * p[0] + R[1][1] * p[1] + R[1][2] * p[2], R[2][0] * p[0] + R[2][1] * p[1] + R[2][2] * p[2]];
+    const cam = this.size * 6, k = cam / (cam - v[2]);
+    return { x: w / 2 + this.pan[0] + v[0] * this.fit * k, y: h / 2 + this.pan[1] - v[1] * this.fit * k, z: v[2], k };
+  },
+  draw(target) {
+    const cv = target ? target.canvas : this.canvas, ctx = cv.getContext("2d");
+    const dpr = target ? target.dpr : (window.devicePixelRatio || 1), w = target ? target.w : cv.clientWidth, h = target ? target.h : cv.clientHeight;
+    if (!target && (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr))) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
+    if (target && target.bg) { ctx.fillStyle = target.bg; ctx.fillRect(0, 0, w, h); }
+    const tagBox = $("tags"); if (!target) tagBox.innerHTML = "";
+    if (!res) return;
+    if (this.reset) { this.orient(); this.reset = false; }
+    this.fit = Math.min(w, h) / (2.9 * this.size) * this.zoom;
+    const op = S.op >= 0 ? res.ops[S.op] : null, sty = STYLES[state.style] || STYLES["Ball and stick"];
+    const X = res.coords.map((p) => op ? pos(p, op, S.t) : p);
+    const P = X.map((p) => this.project(p, w, h)); this.P = P;
+    const items = [], tags = [];
+    const R = this.size * 1.12, L = this.size * 1.3;
+    const ink = cssVar("--ink"), accentInk = cssVar("--ink2");
+    // ---- what to show
+    let list = [];
+    if (op) {
+      if (op.kind === "C" || op.kind === "S") list.push({ kind: "axis", u: op.u, color: op.color, short: op.tag });
+      if (op.kind === "S") list.push({ kind: "plane", n: op.u, color: "#64748B", short: "", strong: true });
+      if (op.kind === "s") list.push({ kind: "plane", n: op.n, color: op.color, short: op.name, strong: true });
+      if (op.kind === "i") list.push({ kind: "i", color: ink, short: "i" });
+    } else if (S.el === "all") list = ELS;
+    else if (S.el === "axes") list = ELS.filter((e) => e.kind === "axis");
+    else if (S.el === "planes") list = ELS.filter((e) => e.kind === "plane");
+    else list = [{ ...ELS[S.el], strong: true }];
+    // ---- elements as small depth-sorted pieces
+    for (const e of list) {
+      if (e.kind === "plane") {
+        const b = basis(e.n), N = 40, rings = [0, R * 0.5, R * 0.85, R];
+        const pt = (r, t) => this.project([0, 1, 2].map((k) => r * (Math.cos(t) * b.e1[k] + Math.sin(t) * b.e2[k])), w, h);
+        if (state.fill) for (let ri = 0; ri < rings.length - 1; ri++) for (let s = 0; s < N; s++) {
+          const t0 = 2 * Math.PI * s / N, t1 = 2 * Math.PI * (s + 1) / N;
+          const q = [pt(rings[ri], t0), pt(rings[ri + 1], t0), pt(rings[ri + 1], t1), pt(rings[ri], t1)];
+          items.push({ z: (q[0].z + q[1].z + q[2].z + q[3].z) / 4 - 0.02, f: () => { ctx.fillStyle = rgba(e.color, e.strong ? 0.2 : 0.075); ctx.beginPath(); ctx.moveTo(q[0].x, q[0].y); q.slice(1).forEach((p) => ctx.lineTo(p.x, p.y)); ctx.closePath(); ctx.fill(); } });
+        }
+        for (let s = 0; s < N; s++) {
+          const a = pt(R, 2 * Math.PI * s / N), c = pt(R, 2 * Math.PI * (s + 1) / N);
+          items.push({ z: (a.z + c.z) / 2, f: () => { ctx.strokeStyle = e.color; ctx.lineWidth = e.strong ? 2.4 : 1.6; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke(); } });
+        }
+        if (e.strong && state.fill) for (let g = -6; g <= 6; g++) {
+          const d = R * g / 7, half = Math.sqrt(R * R - d * d);
+          for (const [u1, u2] of [[b.e1, b.e2], [b.e2, b.e1]]) {
+            const segs = 8;
+            for (let s = 0; s < segs; s++) {
+              const a = this.project(add(mul(u1, d), u2, -half + 2 * half * s / segs), w, h), c = this.project(add(mul(u1, d), u2, -half + 2 * half * (s + 1) / segs), w, h);
+              items.push({ z: (a.z + c.z) / 2 - 0.01, f: () => { ctx.strokeStyle = rgba(e.color, 0.4); ctx.lineWidth = 0.8; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke(); } });
+            }
+          }
+        }
+        if (state.tags && e.short) tags.push({ p: pt(R, 0.7), html: e.short, color: e.color });
+      } else if (e.kind === "axis") {
+        const segs = 28;
+        for (let s = 0; s < segs; s++) {
+          const a = this.project(mul(e.u, -L + 2 * L * s / segs), w, h), c = this.project(mul(e.u, -L + 2 * L * (s + 1) / segs), w, h);
+          items.push({ z: (a.z + c.z) / 2, f: () => { ctx.strokeStyle = e.color; ctx.lineCap = "round"; ctx.lineWidth = Math.max(2.5, 0.09 * this.fit * a.k); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke(); } });
+        }
+        if (state.tags && e.short) tags.push({ p: this.project(mul(e.u, L * 1.04), w, h), html: e.short, color: e.color });
+      } else if (e.kind === "i") {
+        const c = this.project([0, 0, 0], w, h);
+        items.push({ z: c.z + 0.01, f: () => { ctx.fillStyle = e.color; ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(3.5, 0.16 * this.fit), 0, Math.PI * 2); ctx.fill(); } });
+        if (state.tags) tags.push({ p: c, html: "i", color: e.color, dy: -16 });
+      }
+    }
+    // ---- atoms that sit on the shown elements
+    const marks = new Map();
+    if (state.mark && !op) {
+      const markList = typeof S.el === "number" ? list : list.filter((e) => e.kind === "plane");
+      markList.forEach((e) => (e.on || []).forEach((j) => { if (!marks.has(j)) marks.set(j, e.color); }));
+    }
+    // ---- start positions while animating
+    if (op && state.ghost) res.coords.forEach((p, i) => {
+      const q = this.project(p, w, h), r = Math.max(2.5, sty.r(i) * 1.05 * this.fit * q.k);
+      items.push({ z: q.z - 0.005, f: () => { ctx.fillStyle = "rgba(140,150,156,.28)"; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); } });
+    });
+    // ---- bonds and atoms
+    if (sty.bond) res.bonds.forEach(([i, j]) => {
+      const a = P[i], b = P[j], lw = Math.max(1.5, sty.bond * this.fit * (a.k + b.k) / 2 * 1.6), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      items.push({ z: (a.z + b.z) / 2 - 0.01, f: () => {
+        ctx.lineCap = "round"; ctx.strokeStyle = "rgba(20,30,35,.55)"; ctx.lineWidth = lw + 1.6; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.lineWidth = lw; ctx.strokeStyle = shade(colorOf(res.symbols[i]), -0.08); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mx, my); ctx.stroke();
+        ctx.strokeStyle = shade(colorOf(res.symbols[j]), -0.08); ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(b.x, b.y); ctx.stroke(); } });
+    });
+    res.symbols.forEach((s, i) => {
+      const p = P[i], r = Math.max(2.5, sty.r(i) * this.fit * p.k), col = colorOf(s);
+      items.push({ z: p.z, f: () => {
+        if (marks.has(i)) { ctx.fillStyle = rgba(marks.get(i), 0.4); ctx.beginPath(); ctx.arc(p.x, p.y, r + 0.22 * this.fit * p.k + 2, 0, Math.PI * 2); ctx.fill(); }
+        const g = ctx.createRadialGradient(p.x - r * 0.38, p.y - r * 0.42, r * 0.08, p.x, p.y, r);
+        g.addColorStop(0, shade(col, 0.75)); g.addColorStop(0.55, col); g.addColorStop(1, shade(col, -0.42));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 1; ctx.strokeStyle = "rgba(10,20,25,.45)"; ctx.stroke();
+        if (i === this.hover) { ctx.strokeStyle = cssVar("--accent"); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 3, 0, Math.PI * 2); ctx.stroke(); }
+      } });
+    });
+    items.sort((a, b) => a.z - b.z).forEach((it) => it.f());
+    // ---- atom labels
+    if (state.atomLab !== "off") {
+      ctx.font = `600 11px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      res.symbols.forEach((s, i) => {
+        const p = P[i], t = state.atomLab === "el" ? s : res.labels[i], light = isLight(colorOf(s));
+        ctx.lineWidth = 3; ctx.strokeStyle = light ? "rgba(255,255,255,.9)" : "rgba(0,0,0,.75)"; ctx.strokeText(t, p.x, p.y);
+        ctx.fillStyle = light ? "#1D2A31" : "#FFFFFF"; ctx.fillText(t, p.x, p.y);
+      });
+    }
+    // ---- element names as small coloured tags
+    if (target) {
+      ctx.font = `600 12px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      tags.forEach((t) => { const txt = t.html.replace(/<sub>(.*?)<\/sub>/g, "$1").replace(/<[^>]+>/g, ""); const wd = ctx.measureText(txt).width + 12; ctx.fillStyle = t.color; ctx.beginPath(); ctx.roundRect(t.p.x - wd / 2, t.p.y + (t.dy || 0) - 10, wd, 20, 5); ctx.fill(); ctx.fillStyle = "#fff"; ctx.fillText(txt, t.p.x, t.p.y + (t.dy || 0)); });
+    } else {
+      tagBox.innerHTML = tags.map((t) => `<span class="tag" style="background:${t.color};transform:translate(${t.p.x}px,${t.p.y + (t.dy || 0)}px) translate(-50%,-50%)">${t.html}</span>`).join("");
+    }
+  },
+  hit(x, y) {
+    if (!res) return null;
+    let best = null, bz = -Infinity; const sty = STYLES[state.style];
+    this.P.forEach((p, i) => { const r = Math.max(5, sty.r(i) * this.fit * p.k); if ((x - p.x) ** 2 + (y - p.y) ** 2 <= r * r && p.z > bz) { bz = p.z; best = i; } });
+    return best;
+  },
+};
+function jacobi3(S0) {
+  const a = S0.map((r) => r.slice()), v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  for (let sweep = 0; sweep < 50; sweep++) {
+    if (Math.abs(a[0][1]) + Math.abs(a[0][2]) + Math.abs(a[1][2]) < 1e-12) break;
+    for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
+      if (Math.abs(a[p][q]) < 1e-15) continue;
+      const th = (a[q][q] - a[p][p]) / (2 * a[p][q]), t = Math.sign(th || 1) / (Math.abs(th) + Math.sqrt(th * th + 1)), c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < 3; k++) { const x = a[k][p], y = a[k][q]; a[k][p] = c * x - s * y; a[k][q] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = a[p][k], y = a[q][k]; a[p][k] = c * x - s * y; a[q][k] = s * x + c * y; }
+      for (let k = 0; k < 3; k++) { const x = v[k][p], y = v[k][q]; v[k][p] = c * x - s * y; v[k][q] = s * x + c * y; }
+    }
+  }
+  return { vals: [a[0][0], a[1][1], a[2][2]], vecs: v };
+}
+const matMul = (A, B) => A.map((r) => [0, 1, 2].map((j) => r[0] * B[0][j] + r[1] * B[1][j] + r[2] * B[2][j]));
+const rotX = (t) => [[1, 0, 0], [0, Math.cos(t), -Math.sin(t)], [0, Math.sin(t), Math.cos(t)]];
+const rotY = (t) => [[Math.cos(t), 0, Math.sin(t)], [0, 1, 0], [-Math.sin(t), 0, Math.cos(t)]];
+
+(function wireCanvas() {
+  const cv = view.canvas; let drag = null;
+  const posOf = (e) => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  cv.addEventListener("pointerdown", (e) => { if (!res) return; cv.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, pan: e.shiftKey || e.button === 2 }; cv.classList.add("dragging"); });
+  cv.addEventListener("pointermove", (e) => {
+    if (!res) return;
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.x = e.clientX; drag.y = e.clientY;
+      if (drag.pan) { view.pan[0] += dx; view.pan[1] += dy; } else view.R = matMul(matMul(rotY(dx * 0.009), rotX(dy * 0.009)), view.R);
+      $("tip").hidden = true; view.draw(); return;
+    }
+    const [x, y] = posOf(e), i = view.hit(x, y);
+    if (i !== view.hover) { view.hover = i; view.draw(); }
+    const tip = $("tip");
+    if (i === null) { tip.hidden = true; return; }
+    const on = ELS.filter((el) => (el.on || []).includes(i)).map((el) => el.short);
+    tip.innerHTML = `<b>${res.labels[i]}</b>${on.length ? `<br>on ${on.join(", ")}` : ""}`;
+    tip.hidden = false;
+    const vp = $("viewport").getBoundingClientRect();
+    tip.style.left = Math.min(x + 14, vp.width - tip.offsetWidth - 8) + "px"; tip.style.top = Math.min(y + 14, vp.height - tip.offsetHeight - 8) + "px";
+  });
+  const end = () => { drag = null; cv.classList.remove("dragging"); };
+  cv.addEventListener("pointerup", end); cv.addEventListener("pointercancel", end);
+  cv.addEventListener("pointerleave", () => { if (!drag) { view.hover = null; $("tip").hidden = true; view.draw(); } });
+  cv.addEventListener("wheel", (e) => { if (!res) return; e.preventDefault(); view.zoom = Math.min(12, Math.max(0.3, view.zoom * Math.exp(-e.deltaY * 0.0015))); view.draw(); }, { passive: false });
+  cv.addEventListener("dblclick", () => { if (!res) return; view.orient(); view.draw(); });
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());
+  new ResizeObserver(() => view.draw()).observe(cv);
+})();
+
+/* ---------------- toolbar ---------------- */
+function wireToolbar() {
+  $("styleSeg").innerHTML = Object.keys(STYLES).map((k) => `<button data-style="${k}" aria-pressed="${state.style === k}">${k}</button>`).join("");
+  $("styleSeg").onclick = (e) => { const b = e.target.closest("[data-style]"); if (!b) return; state.style = b.dataset.style; save(); wireToolbar(); view.draw(); };
+  $("atomLab").value = state.atomLab;
+  $("atomLab").onchange = (e) => { state.atomLab = e.target.value; save(); view.draw(); };
+  for (const [id, key] of [["tTags", "tags"], ["tFill", "fill"], ["tMark", "mark"], ["tLoop", "loop"], ["tGhost", "ghost"]]) {
+    $(id).checked = state[key];
+    $(id).onchange = (e) => { state[key] = e.target.checked; save(); view.draw(); };
+  }
+  $("resetView").onclick = () => { if (res) { view.orient(); view.draw(); } };
+}
+
+/* ---------------- downloads ---------------- */
+$("dlBtn").addEventListener("click", (e) => { e.stopPropagation(); const m = $("dlMenu"); m.hidden = !m.hidden; $("dlBtn").setAttribute("aria-expanded", String(!m.hidden)); });
+document.addEventListener("click", (e) => { if (!e.target.closest("#dlMenu") && !e.target.closest("#dlBtn")) { $("dlMenu").hidden = true; $("dlBtn").setAttribute("aria-expanded", "false"); } });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("dlMenu").hidden = true; });
+$("dlMenu").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-dl]"); if (!b || !res) return;
+  $("dlMenu").hidden = true;
+  const stem = file.name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9_.-]+/g, "_") + (file.frames.length > 1 ? `_frame${file.frame + 1}` : "");
+  if (b.dataset.dl === "png") {
+    const vp = $("viewport"), w = vp.clientWidth, h = vp.clientHeight, c = document.createElement("canvas"), dpr = 3;
+    c.width = w * dpr; c.height = h * dpr;
+    view.draw({ canvas: c, w, h, dpr, bg: cssVar("--sheet") });
+    c.toBlob((blob) => download(`${stem}_${res.pg.replace("*", "inf")}.png`, blob), "image/png");
+    return;
+  }
+  const r = await runner.call("exports", file.frame, state.tol, stem);
+  if (!r.ok) return toast(r.error);
+  const name = b.dataset.dl === "report" ? `${stem}_pointgroup.txt` : `${stem}_centred.xyz`;
+  download(name, r.files[name]);
+});
+
+/* ---------------- wiring ---------------- */
+$("openBtn").onclick = $("emptyOpen").onclick = () => $("fileInput").click();
+$("fileInput").onchange = (e) => { const f = e.target.files[0]; if (f) readFile(f); e.target.value = ""; };
+$("try").addEventListener("click", (e) => { const b = e.target.closest("[data-ex]"); if (b) openExample(b.dataset.ex); });
+$("frameSel").onchange = (e) => setFrame(+e.target.value);
+$("framePrev").onclick = () => setFrame(file.frame - 1);
+$("frameNext").onclick = () => setFrame(file.frame + 1);
+function setFrame(k) { if (!file) return; file.frame = Math.max(0, Math.min(file.frames.length - 1, k)); scanRows = null; renderFileInfo(); save(); analyse(); }
+let dragDepth = 0;
+window.addEventListener("dragenter", (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { dragDepth++; $("dropGlow").hidden = false; } });
+window.addEventListener("dragleave", () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $("dropGlow").hidden = true; });
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("dropGlow").hidden = true; const f = e.dataTransfer.files[0]; if (f) readFile(f); });
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => view.draw());
+renderTry(); renderOps(); renderCaption();
+boot();
+</script>
+</body>
+</html>
