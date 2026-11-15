@@ -81,6 +81,7 @@ select, input[type=number] { border: 1px solid var(--line2); background: var(--s
   background-color: var(--sheet); }
 .viewport { position: relative; min-height: 0;
   background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; }
+.viewport.no-grid { background-image: none; }
 #mol { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
 #mol.dragging { cursor: grabbing; }
 #tags { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
@@ -233,6 +234,7 @@ table.data tr.clickable:hover td { background: var(--accent-soft); }
         <span class="sep"></span>
         <label class="check">Atom labels
           <select id="atomLab"><option value="off">Off</option><option value="el">C, H</option><option value="num">C1, C2 …</option></select></label>
+        <label class="check"><input type="checkbox" id="tGrid" checked>Background grid</label>
         <span class="sym-opts" id="symOpts">
           <label class="check"><input type="checkbox" id="tTags" checked>Element names</label>
           <label class="check"><input type="checkbox" id="tFill" checked>Plane fill</label>
@@ -381,7 +383,7 @@ const runner = {
 
 /* ---------------- state ---------------- */
 let EXAMPLES = [], ready = false, queued = null, anSeq = 0;
-let state = { tol: 0.3, tab: "elements", style: "Ball and stick", atomLab: "off", sym: true, tags: true, fill: true, mark: true, loop: true, ghost: true };
+let state = { tol: 0.3, tab: "elements", style: "Ball and stick", atomLab: "off", sym: true, grid: true, tags: true, fill: true, mark: true, loop: true, ghost: true };
 let file = null;   // { name, text, frames, frame }
 let res = null;    // the analysis
 let S = { el: "all", op: -1, t: 0, playing: false };   // what the viewer shows
@@ -900,6 +902,9 @@ function wireToolbar() {
   $("atomLab").onchange = (e) => { state.atomLab = e.target.value; save(); view.draw(); };
   $("showSeg").onclick = (e) => { const b = e.target.closest("[data-sym]"); if (b) setSym(b.dataset.sym === "1"); };
   syncSym();
+  $("viewport").classList.toggle("no-grid", state.grid === false);
+  $("tGrid").checked = state.grid !== false;
+  $("tGrid").onchange = (e) => { state.grid = e.target.checked; save(); $("viewport").classList.toggle("no-grid", !state.grid); };
   for (const [id, key] of [["tTags", "tags"], ["tFill", "fill"], ["tMark", "mark"], ["tLoop", "loop"], ["tGhost", "ghost"]]) {
     $(id).checked = state[key];
     $(id).onchange = (e) => { state[key] = e.target.checked; save(); view.draw(); };
