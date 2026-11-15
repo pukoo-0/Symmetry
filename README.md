@@ -18,7 +18,7 @@ visitor's computer. No pymatgen needed.
 | Part | Contents |
 |---|---|
 | Result | Point group, classes of operations (character-table header), order h, counts of axes and planes, tolerance |
-| 3D view | Ball and stick, sticks or space filling; axes and planes coloured by type; atoms on the shown element marked |
+| 3D view | The molecule on its own ("Molecule only") or with its symmetry elements; ball and stick, sticks or space filling; axes and planes coloured by type; atoms on the shown element marked |
 | Animation | Any operation of the group, with start positions shown faintly; S operations in two steps |
 | Elements | Every axis, plane and centre, the atoms on it, and how well it fits (Å) |
 | Operations | Every operation with a plain description and its fit |

@@ -87,6 +87,8 @@ select, input[type=number] { border: 1px solid var(--line2); background: var(--s
 .tag { position: absolute; left: 0; top: 0; font: 600 12px var(--sans); color: #fff; padding: 1px 7px 2px; border-radius: 5px; white-space: nowrap; will-change: transform; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .toolbar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+.toolbar .sym-opts { display: contents; }
+.toolbar .sym-opts[hidden] { display: none; }
 .seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; }
 .seg button { border: 0; background: var(--sheet); padding: 4px 10px; cursor: pointer; color: var(--ink2); font-size: 13px; }
 .seg button + button { border-left: 1px solid var(--line2); }
@@ -226,13 +228,16 @@ table.data tr.clickable:hover td { background: var(--accent-soft); }
   <div class="main">
     <section class="stage" id="stage" aria-label="Molecule and its symmetry elements">
       <div class="toolbar">
+        <div class="seg" role="group" aria-label="What to show" id="showSeg"><button data-sym="0">Molecule only</button><button data-sym="1">With symmetry</button></div>
         <div class="seg" role="group" aria-label="Drawing style" id="styleSeg"></div>
         <span class="sep"></span>
         <label class="check">Atom labels
           <select id="atomLab"><option value="off">Off</option><option value="el">C, H</option><option value="num">C1, C2 …</option></select></label>
-        <label class="check"><input type="checkbox" id="tTags" checked>Element names</label>
-        <label class="check"><input type="checkbox" id="tFill" checked>Plane fill</label>
-        <label class="check"><input type="checkbox" id="tMark" checked>Mark atoms on elements</label>
+        <span class="sym-opts" id="symOpts">
+          <label class="check"><input type="checkbox" id="tTags" checked>Element names</label>
+          <label class="check"><input type="checkbox" id="tFill" checked>Plane fill</label>
+          <label class="check"><input type="checkbox" id="tMark" checked>Mark atoms on elements</label>
+        </span>
         <button class="btn small" id="resetView">Reset view</button>
       </div>
       <div class="viewport" id="viewport">
@@ -376,7 +381,7 @@ const runner = {
 
 /* ---------------- state ---------------- */
 let EXAMPLES = [], ready = false, queued = null, anSeq = 0;
-let state = { tol: 0.3, tab: "elements", style: "Ball and stick", atomLab: "off", tags: true, fill: true, mark: true, loop: true, ghost: true };
+let state = { tol: 0.3, tab: "elements", style: "Ball and stick", atomLab: "off", sym: true, tags: true, fill: true, mark: true, loop: true, ghost: true };
 let file = null;   // { name, text, frames, frame }
 let res = null;    // the analysis
 let S = { el: "all", op: -1, t: 0, playing: false };   // what the viewer shows
@@ -580,7 +585,13 @@ $("body").addEventListener("click", (e) => {
   const op = t.closest("[data-op]"); if (op) return pickOp(+op.dataset.op);
   const tr = t.closest("[data-tol]"); if (tr) { state.tol = +tr.dataset.tol; renderResult(); save(); analyse().then(() => renderBody(true)); }
 });
-function showEl(v) { S.el = v; if (S.op >= 0) { S.op = -1; S.playing = false; $("opSel").value = "-1"; } view.draw(); renderBody(true); renderCaption(); }
+function syncSym() {
+  document.querySelectorAll("#showSeg [data-sym]").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.sym === "1") === !!state.sym)));
+  $("symOpts").hidden = !state.sym;
+}
+function setSym(on) { state.sym = on; save(); syncSym(); view.draw(); }
+// picking an element in the list means you want to see it
+function showEl(v) { if (!state.sym) setSym(true); S.el = v; if (S.op >= 0) { S.op = -1; S.playing = false; $("opSel").value = "-1"; } view.draw(); renderBody(true); renderCaption(); }
 function stepEl(d) { if (!ELS.length) return; let i = typeof S.el === "number" ? S.el + d : (d > 0 ? 0 : ELS.length - 1); showEl((i + ELS.length) % ELS.length); }
 
 /* ---------------- animation ---------------- */
@@ -716,6 +727,9 @@ const view = {
     else if (S.el === "axes") list = ELS.filter((e) => e.kind === "axis");
     else if (S.el === "planes") list = ELS.filter((e) => e.kind === "plane");
     else list = [{ ...ELS[S.el], strong: true }];
+    if (!state.sym) list = [];                        // molecule only
+    // an axis is hidden where it runs inside an atom, and bonds start at the atom's surface, as solid balls would
+    const inAtom = (q) => X.some((p, i) => { const r = sty.r(i) * 0.97; return (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2 < r * r; });
     // ---- elements as small depth-sorted pieces
     for (const e of list) {
       if (e.kind === "plane") {
@@ -742,8 +756,9 @@ const view = {
         }
         if (state.tags && e.short) tags.push({ p: pt(R, 0.7), html: e.short, color: e.color });
       } else if (e.kind === "axis") {
-        const segs = 28;
+        const segs = 72;
         for (let s = 0; s < segs; s++) {
+          if (inAtom(mul(e.u, -L + 2 * L * (s + 0.5) / segs))) continue;
           const a = this.project(mul(e.u, -L + 2 * L * s / segs), w, h), c = this.project(mul(e.u, -L + 2 * L * (s + 1) / segs), w, h);
           items.push({ z: (a.z + c.z) / 2, f: () => { ctx.strokeStyle = e.color; ctx.lineCap = "round"; ctx.lineWidth = Math.max(2.5, 0.09 * this.fit * a.k); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke(); } });
         }
@@ -756,7 +771,7 @@ const view = {
     }
     // ---- atoms that sit on the shown elements
     const marks = new Map();
-    if (state.mark && !op) {
+    if (state.mark && state.sym && !op) {
       const markList = typeof S.el === "number" ? list : list.filter((e) => e.kind === "plane");
       markList.forEach((e) => (e.on || []).forEach((j) => { if (!marks.has(j)) marks.set(j, e.color); }));
     }
@@ -766,13 +781,33 @@ const view = {
       items.push({ z: q.z - 0.005, f: () => { ctx.fillStyle = "rgba(140,150,156,.28)"; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill(); } });
     });
     // ---- bonds and atoms
-    if (sty.bond) res.bonds.forEach(([i, j]) => {
-      const a = P[i], b = P[j], lw = Math.max(1.5, sty.bond * this.fit * (a.k + b.k) / 2 * 1.6), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      items.push({ z: (a.z + b.z) / 2 - 0.01, f: () => {
-        ctx.lineCap = "round"; ctx.strokeStyle = "rgba(20,30,35,.55)"; ctx.lineWidth = lw + 1.6; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.lineWidth = lw; ctx.strokeStyle = shade(colorOf(res.symbols[i]), -0.08); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(mx, my); ctx.stroke();
-        ctx.strokeStyle = shade(colorOf(res.symbols[j]), -0.08); ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(b.x, b.y); ctx.stroke(); } });
-    });
+    // Each bond is two half-sticks, one per atom colour, sorted by depth on their own. A stick starts where its
+    // surface leaves the ball (not inside it), so no part of a stick is ever painted over the ball it comes from.
+    if (sty.bond) {
+      const hw = sty.bond * 0.8;                                  // half the drawn stick width, in Å
+      const exitAt = (r) => Math.sqrt(Math.max(r * r - hw * hw, 0));
+      res.bonds.forEach(([i, j]) => {
+        const d = [0, 1, 2].map((k) => X[j][k] - X[i][k]), len = Math.hypot(...d) || 1, u = d.map((v) => v / len);
+        const si = Math.min(exitAt(sty.r(i)), len * 0.45), sj = Math.min(exitAt(sty.r(j)), len * 0.45);
+        const at = (t) => this.project(X[i].map((v, k) => v + u[k] * t), w, h);
+        const tm = (si + len - sj) / 2;                           // where the two colours meet
+        // how much the stick points at the viewer: its round end is seen as an ellipse that is a flat edge for a stick
+        // lying across the screen and a full circle for one pointing straight out
+        const uz = Math.abs(this.R[2][0] * u[0] + this.R[2][1] * u[1] + this.R[2][2] * u[2]);
+        for (const [atom, t0, t1] of [[i, si, tm], [j, len - sj, tm]]) {
+          const a = at(t0), m = at(t1), ang = Math.atan2(m.y - a.y, m.x - a.x);
+          const lw = Math.max(1.5, sty.bond * this.fit * (a.k + m.k) / 2 * 1.6), fill = shade(colorOf(res.symbols[atom]), -0.08);
+          const end = (r) => { ctx.beginPath(); ctx.ellipse(a.x, a.y, Math.max(r * uz, 0.01), r, ang, 0, Math.PI * 2); ctx.fill(); };
+          items.push({ z: (a.z + m.z) / 2 - 0.01, f: () => {
+            ctx.lineCap = "butt";
+            ctx.strokeStyle = ctx.fillStyle = "rgba(20,30,35,.55)"; ctx.lineWidth = lw + 1.6;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(m.x, m.y); ctx.stroke(); end(lw / 2 + 0.8);
+            ctx.strokeStyle = ctx.fillStyle = fill; ctx.lineWidth = lw;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(m.x, m.y); ctx.stroke(); end(lw / 2);
+          } });
+        }
+      });
+    }
     res.symbols.forEach((s, i) => {
       const p = P[i], r = Math.max(2.5, sty.r(i) * this.fit * p.k), col = colorOf(s);
       items.push({ z: p.z, f: () => {
@@ -863,6 +898,8 @@ function wireToolbar() {
   $("styleSeg").onclick = (e) => { const b = e.target.closest("[data-style]"); if (!b) return; state.style = b.dataset.style; save(); wireToolbar(); view.draw(); };
   $("atomLab").value = state.atomLab;
   $("atomLab").onchange = (e) => { state.atomLab = e.target.value; save(); view.draw(); };
+  $("showSeg").onclick = (e) => { const b = e.target.closest("[data-sym]"); if (b) setSym(b.dataset.sym === "1"); };
+  syncSym();
   for (const [id, key] of [["tTags", "tags"], ["tFill", "fill"], ["tMark", "mark"], ["tLoop", "loop"], ["tGhost", "ghost"]]) {
     $(id).checked = state[key];
     $(id).onchange = (e) => { state[key] = e.target.checked; save(); view.draw(); };
