@@ -810,6 +810,7 @@ const view = {
         }
       });
     }
+    const labFont = state.atomLab !== "off" ? `600 11px ${getComputedStyle(document.body).fontFamily}` : "";
     res.symbols.forEach((s, i) => {
       const p = P[i], r = Math.max(2.5, sty.r(i) * this.fit * p.k), col = colorOf(s);
       items.push({ z: p.z, f: () => {
@@ -819,18 +820,15 @@ const view = {
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
         ctx.lineWidth = 1; ctx.strokeStyle = "rgba(10,20,25,.45)"; ctx.stroke();
         if (i === this.hover) { ctx.strokeStyle = cssVar("--accent"); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(p.x, p.y, r + 3, 0, Math.PI * 2); ctx.stroke(); }
+        if (state.atomLab !== "off") {
+          const t = state.atomLab === "el" ? s : res.labels[i], light = isLight(col);
+          ctx.font = labFont; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.lineWidth = 3; ctx.strokeStyle = light ? "rgba(255,255,255,.9)" : "rgba(0,0,0,.75)"; ctx.strokeText(t, p.x, p.y);
+          ctx.fillStyle = light ? "#1D2A31" : "#FFFFFF"; ctx.fillText(t, p.x, p.y);
+        }
       } });
     });
     items.sort((a, b) => a.z - b.z).forEach((it) => it.f());
-    // ---- atom labels
-    if (state.atomLab !== "off") {
-      ctx.font = `600 11px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      res.symbols.forEach((s, i) => {
-        const p = P[i], t = state.atomLab === "el" ? s : res.labels[i], light = isLight(colorOf(s));
-        ctx.lineWidth = 3; ctx.strokeStyle = light ? "rgba(255,255,255,.9)" : "rgba(0,0,0,.75)"; ctx.strokeText(t, p.x, p.y);
-        ctx.fillStyle = light ? "#1D2A31" : "#FFFFFF"; ctx.fillText(t, p.x, p.y);
-      });
-    }
     // ---- element names as small coloured tags
     if (target) {
       ctx.font = `600 12px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
