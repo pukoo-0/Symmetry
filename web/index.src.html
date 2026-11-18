@@ -171,11 +171,12 @@ table.data tr.clickable:hover td { background: var(--accent-soft); }
 .tagx.ok { background: var(--ok-soft); color: var(--ok); }
 .tagx.no { background: var(--warn-soft); color: var(--warn); }
 
-.status { display: flex; align-items: center; gap: 14px; padding: 6px 18px; border-top: 1px solid var(--line); background: var(--panel); color: var(--ink2); font-size: 12px; }
+.status { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 6px 18px; border-top: 1px solid var(--line); background: var(--panel); color: var(--ink2); font-size: 12px; }
 .status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink3); display: inline-block; margin-right: 6px; }
 .status .dot.ready { background: var(--ok); }
 .status .dot.fail { background: var(--bad); }
-.status .credit { margin-left: auto; font-style: italic; }
+.status .copyright { color: var(--ink2); }
+.status .engine { margin-left: auto; }
 .toast { position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 9px 14px; border-radius: 8px; z-index: 50; max-width: min(560px, calc(100% - 32px)); font-size: 13px; }
 
 @media (max-width: 900px) {
@@ -278,8 +279,8 @@ table.data tr.clickable:hover td { background: var(--accent-soft); }
   </div>
 
   <footer class="status">
-    <span><span class="dot" id="engineDot"></span><span id="engineText">Starting Python in your browser…</span></span>
-    <span class="credit">Made by George</span>
+    <span class="copyright">© 2026 George Sanjaya &amp; Hafiz Aji Aziz</span>
+    <span class="engine"><span class="dot" id="engineDot"></span><span id="engineText">Starting Python in your browser…</span></span>
   </footer>
 </div>
 <div class="toast" id="toast" hidden></div>

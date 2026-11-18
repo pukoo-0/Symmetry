@@ -73,4 +73,4 @@ pytest
 
 then commit `docs/index.html` as well.
 
-Made by George.
+© 2026 George Sanjaya & Hafiz Aji Aziz.
